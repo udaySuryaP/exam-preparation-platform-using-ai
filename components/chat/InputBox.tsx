@@ -39,9 +39,9 @@ export function InputBox({ onSend, disabled }: InputBoxProps) {
     };
 
     return (
-        <div className="border-t border-gray-100 bg-white p-4">
-            <div className="max-w-3xl mx-auto">
-                <div className="relative flex items-end border-2 border-gray-200 rounded-3xl bg-gray-50 focus-within:border-indigo-400 focus-within:bg-white transition-all duration-200">
+        <div className="sticky bottom-0 bg-main-bg border-t border-main-border p-4 pb-6">
+            <div className="max-w-[768px] mx-auto">
+                <div className="relative">
                     <textarea
                         ref={textareaRef}
                         value={value}
@@ -50,24 +50,24 @@ export function InputBox({ onSend, disabled }: InputBoxProps) {
                         placeholder="Ask anything from your syllabus..."
                         disabled={disabled}
                         rows={1}
-                        className="flex-1 resize-none bg-transparent px-5 py-3.5 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none disabled:opacity-50 min-h-[44px] max-h-[200px]"
+                        className="w-full min-h-[52px] max-h-[200px] px-4 pr-14 py-3.5 bg-white border border-main-border rounded-xl text-[15px] text-main-text placeholder:text-main-text-tertiary resize-none transition-all duration-150 focus:outline-none focus:border-accent-blue focus:shadow-focus disabled:opacity-50"
                         aria-label="Message input"
                     />
                     <button
                         onClick={handleSend}
                         disabled={!value.trim() || disabled}
                         className={cn(
-                            "m-2 p-2 rounded-full transition-all duration-200 shrink-0",
+                            "absolute right-3 bottom-3 w-8 h-8 rounded-lg flex items-center justify-center transition-all duration-150",
                             value.trim() && !disabled
-                                ? "bg-indigo-600 text-white hover:bg-indigo-700 shadow-sm"
-                                : "bg-gray-200 text-gray-400 cursor-not-allowed"
+                                ? "bg-accent-blue text-white hover:bg-accent-blue-hover cursor-pointer"
+                                : "bg-main-border text-main-text-tertiary cursor-not-allowed"
                         )}
                         aria-label="Send message"
                     >
                         <Send className="w-4 h-4" />
                     </button>
                 </div>
-                <p className="text-[11px] text-gray-400 text-center mt-2">
+                <p className="text-xs text-main-text-tertiary text-center mt-3">
                     KTU Exam Prep AI can make mistakes. Verify important information.
                 </p>
             </div>

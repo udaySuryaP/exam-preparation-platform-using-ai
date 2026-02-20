@@ -33,15 +33,15 @@ export function ChatItemMenu({ chatId, onRename, onDelete }: ChatItemMenuProps) 
                     e.stopPropagation();
                     setOpen(!open);
                 }}
-                className="p-1 rounded hover:bg-gray-200 transition-colors opacity-0 group-hover:opacity-100 data-[open=true]:opacity-100"
+                className="p-1 rounded hover:bg-sidebar-border transition-colors duration-150 opacity-0 group-hover:opacity-100 data-[open=true]:opacity-100"
                 data-open={open}
                 aria-label="Chat options"
             >
-                <MoreVertical className="w-4 h-4 text-gray-400" />
+                <MoreVertical className="w-4 h-4 text-sidebar-text-secondary" />
             </button>
 
             {open && (
-                <div className="absolute right-0 top-full mt-1 w-40 bg-white border border-gray-200 rounded-lg shadow-lg z-50 py-1">
+                <div className="absolute right-0 top-full mt-1 w-40 bg-white border border-gray-200 rounded-lg shadow-xl z-50 py-1">
                     <button
                         onClick={(e) => {
                             e.preventDefault();
@@ -49,7 +49,7 @@ export function ChatItemMenu({ chatId, onRename, onDelete }: ChatItemMenuProps) 
                             setOpen(false);
                             onRename(chatId);
                         }}
-                        className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
+                        className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-600 hover:bg-gray-50 hover:text-gray-900 transition-colors duration-150"
                     >
                         <Pencil className="w-4 h-4" />
                         Rename
@@ -61,7 +61,7 @@ export function ChatItemMenu({ chatId, onRename, onDelete }: ChatItemMenuProps) 
                             setOpen(false);
                             onDelete(chatId);
                         }}
-                        className="w-full flex items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-red-50 transition-colors"
+                        className="w-full flex items-center gap-2 px-3 py-2 text-sm text-accent-red hover:bg-red-50 transition-colors duration-150"
                     >
                         <Trash2 className="w-4 h-4" />
                         Delete

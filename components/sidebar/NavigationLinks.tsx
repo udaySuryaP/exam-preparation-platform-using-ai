@@ -27,10 +27,10 @@ export function NavigationLinks({ onNavigate }: NavigationLinksProps) {
                         href={link.href}
                         onClick={onNavigate}
                         className={cn(
-                            "flex items-center gap-3 h-10 px-4 rounded-md text-sm font-medium transition-all duration-150",
+                            "flex items-center gap-3 h-10 px-3 rounded-lg text-sm font-medium transition-all duration-150",
                             isActive
-                                ? "bg-indigo-50 text-indigo-600 border-l-[3px] border-indigo-600"
-                                : "text-gray-600 hover:bg-gray-100"
+                                ? "bg-sidebar-surface text-sidebar-text"
+                                : "text-sidebar-text-secondary hover:bg-sidebar-hover hover:text-sidebar-text"
                         )}
                     >
                         <link.icon className="w-5 h-5 shrink-0" />
