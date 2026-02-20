@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { generateAnswer } from "@/lib/rag/generate";
+// import { generateAnswer } from "@/lib/rag/generate";
 import { checkRateLimit } from "@/lib/rate-limit";
 
 const MAX_MESSAGE_LENGTH = 5000;
@@ -103,19 +103,29 @@ export async function POST(request: Request) {
             .order("created_at", { ascending: true })
             .limit(10);
 
-        // Generate AI response
-        const { answer, sources } = await generateAnswer(
-            message.trim(),
-            courseId,
-            (history || []) as { role: "user" | "assistant"; content: string }[]
-        );
+        // // Generate AI response
+        // const { answer, sources } = await generateAnswer(
+        //     message.trim(),
+        //     courseId,
+        //     (history || []) as { role: "user" | "assistant"; content: string }[]
+        // );
 
-        // Save AI message
+        // // Save AI message
+        // await supabase.from("messages").insert({
+        //     conversation_id: convId,
+        //     role: "assistant",
+        //     content: answer,
+        //     sources,
+        // });
+        const answer =
+            "AI responses are not enabled yet. This feature is coming soon 🚀";
+
+        // Save assistant placeholder message
         await supabase.from("messages").insert({
             conversation_id: convId,
             role: "assistant",
             content: answer,
-            sources,
+            sources: [],
         });
 
         // Update conversation timestamp
@@ -126,7 +136,7 @@ export async function POST(request: Request) {
 
         return NextResponse.json({
             answer,
-            sources,
+            sources: [],
             conversationId: convId,
         });
     } catch {
