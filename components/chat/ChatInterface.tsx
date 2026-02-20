@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { useSearchParams } from "next/navigation";
 import { GraduationCap, BookOpen, Brain, Target } from "lucide-react";
 import { MessageList } from "./MessageList";
@@ -31,9 +31,53 @@ export function ChatInterface() {
 
     const [messages, setMessages] = useState<Message[]>([]);
     const [isLoading, setIsLoading] = useState(false);
+    const [isLoadingHistory, setIsLoadingHistory] = useState(false);
     const [currentConversationId, setCurrentConversationId] = useState<
         string | null
     >(conversationId);
+
+    // Load existing messages when navigating to a conversation
+    useEffect(() => {
+        setCurrentConversationId(conversationId);
+
+        if (!conversationId) {
+            setMessages([]);
+            return;
+        }
+
+        const loadMessages = async () => {
+            setIsLoadingHistory(true);
+            try {
+                const { createClient } = await import("@/lib/supabase/client");
+                const supabase = createClient();
+                const { data } = await supabase
+                    .from("messages")
+                    .select("*")
+                    .eq("conversation_id", conversationId)
+                    .order("created_at", { ascending: true });
+
+                if (data && data.length > 0) {
+                    setMessages(
+                        data.map((m) => ({
+                            id: m.id,
+                            conversation_id: m.conversation_id,
+                            role: m.role as "user" | "assistant",
+                            content: m.content,
+                            sources: m.sources,
+                            created_at: m.created_at,
+                        }))
+                    );
+                } else {
+                    setMessages([]);
+                }
+            } catch {
+                setMessages([]);
+            }
+            setIsLoadingHistory(false);
+        };
+
+        loadMessages();
+    }, [conversationId]);
 
     const sendMessage = useCallback(
         async (content: string) => {
@@ -74,8 +118,10 @@ export function ChatInterface() {
                 };
 
                 setMessages((prev) => [...prev, aiMessage]);
-                if (!currentConversationId) {
+                if (!currentConversationId && data.conversationId) {
                     setCurrentConversationId(data.conversationId);
+                    // Update URL so sidebar highlights this conversation
+                    window.history.replaceState(null, "", `/chat?id=${data.conversationId}`);
                 }
             } catch (error) {
                 const errorMessage: Message = {

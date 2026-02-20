@@ -1,14 +1,13 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { User, Loader2, Save, BookOpen, Clock, Brain } from "lucide-react";
-import { createClient } from "@/lib/supabase/client";
+import { User, Loader2, Save, BookOpen, Clock, Brain, CheckCircle, AlertCircle } from "lucide-react";
 import { DEPARTMENTS } from "@/types";
 
 export default function ProfilePage() {
     const [isLoading, setIsLoading] = useState(true);
     const [isSaving, setIsSaving] = useState(false);
-    const [saved, setSaved] = useState(false);
+    const [saveMessage, setSaveMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
     const [profile, setProfile] = useState({
         full_name: "",
         email: "",
@@ -24,42 +23,25 @@ export default function ProfilePage() {
 
     useEffect(() => {
         const load = async () => {
-            const supabase = createClient();
-            const { data: { user } } = await supabase.auth.getUser();
-
-            if (user) {
-                setProfile((prev) => ({
-                    ...prev,
-                    email: user.email || "",
-                    full_name: user.user_metadata?.full_name || "",
-                }));
-
-                const { data: profileData } = await supabase
-                    .from("user_profiles")
-                    .select("*")
-                    .eq("id", user.id)
-                    .single();
-
-                if (profileData) {
-                    setProfile({
-                        full_name: profileData.full_name || "",
-                        email: user.email || "",
-                        college_name: profileData.college_name || "",
-                        branch: profileData.branch || "",
-                        semester: profileData.semester || 1,
-                    });
+            try {
+                const res = await fetch("/api/profile");
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data.profile) {
+                        setProfile({
+                            full_name: data.profile.full_name || "",
+                            email: data.profile.email || "",
+                            college_name: data.profile.college_name || "",
+                            branch: data.profile.branch || "",
+                            semester: data.profile.semester || 1,
+                        });
+                    }
+                    if (data.stats) {
+                        setStats(data.stats);
+                    }
                 }
-
-                // Get message count
-                const { count } = await supabase
-                    .from("messages")
-                    .select("*", { count: "exact", head: true })
-                    .eq("role", "user");
-
-                setStats((prev) => ({
-                    ...prev,
-                    questions: count || 0,
-                }));
+            } catch {
+                // Profile load failed silently - form shows defaults
             }
             setIsLoading(false);
         };
@@ -67,25 +49,50 @@ export default function ProfilePage() {
     }, []);
 
     const handleSave = async () => {
-        setIsSaving(true);
-        const supabase = createClient();
-        const { data: { user } } = await supabase.auth.getUser();
+        // Client-side validation
+        if (!profile.full_name.trim() || profile.full_name.trim().length < 2) {
+            setSaveMessage({ type: "error", text: "Name must be at least 2 characters." });
+            return;
+        }
 
-        if (user) {
-            await supabase.from("user_profiles").upsert({
-                id: user.id,
-                full_name: profile.full_name,
-                email: profile.email,
-                college_name: profile.college_name,
-                branch: profile.branch,
-                semester: profile.semester,
-                onboarding_completed: true,
+        setIsSaving(true);
+        setSaveMessage(null);
+
+        try {
+            const res = await fetch("/api/profile", {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    full_name: profile.full_name,
+                    college_name: profile.college_name,
+                    branch: profile.branch,
+                    semester: profile.semester,
+                }),
             });
+
+            const data = await res.json();
+
+            if (!res.ok) {
+                setSaveMessage({ type: "error", text: data.error || "Failed to save profile." });
+            } else {
+                setSaveMessage({ type: "success", text: "Profile updated successfully!" });
+                // Update local state with server-validated data
+                if (data.profile) {
+                    setProfile((prev) => ({
+                        ...prev,
+                        full_name: data.profile.full_name,
+                        college_name: data.profile.college_name,
+                        branch: data.profile.branch,
+                        semester: data.profile.semester,
+                    }));
+                }
+                setTimeout(() => setSaveMessage(null), 3000);
+            }
+        } catch {
+            setSaveMessage({ type: "error", text: "Network error. Please try again." });
         }
 
         setIsSaving(false);
-        setSaved(true);
-        setTimeout(() => setSaved(false), 2000);
     };
 
     if (isLoading) {
@@ -126,6 +133,23 @@ export default function ProfilePage() {
                     </div>
                 </div>
 
+                {/* Save Toast */}
+                {saveMessage && (
+                    <div
+                        className={`mb-6 p-3 rounded-lg flex items-center gap-2 text-sm ${saveMessage.type === "success"
+                                ? "bg-green-50 border border-green-200 text-green-700"
+                                : "bg-red-50 border border-red-200 text-red-700"
+                            }`}
+                    >
+                        {saveMessage.type === "success" ? (
+                            <CheckCircle className="w-4 h-4 shrink-0" />
+                        ) : (
+                            <AlertCircle className="w-4 h-4 shrink-0" />
+                        )}
+                        {saveMessage.text}
+                    </div>
+                )}
+
                 {/* Profile Form */}
                 <div className="bg-white rounded-xl border border-gray-200 p-6 mb-6">
                     <h3 className="text-base font-semibold text-gray-900 mb-4 flex items-center gap-2">
@@ -144,6 +168,8 @@ export default function ProfilePage() {
                                 onChange={(e) =>
                                     setProfile({ ...profile, full_name: e.target.value })
                                 }
+                                maxLength={100}
+                                placeholder="Enter your full name"
                                 className="w-full px-4 py-2.5 rounded-lg border border-gray-200 bg-gray-50 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all"
                             />
                         </div>
@@ -158,6 +184,7 @@ export default function ProfilePage() {
                                 disabled
                                 className="w-full px-4 py-2.5 rounded-lg border border-gray-200 bg-gray-100 text-sm text-gray-500 cursor-not-allowed"
                             />
+                            <p className="mt-1 text-xs text-gray-400">Email cannot be changed</p>
                         </div>
 
                         <div>
@@ -170,6 +197,8 @@ export default function ProfilePage() {
                                 onChange={(e) =>
                                     setProfile({ ...profile, college_name: e.target.value })
                                 }
+                                maxLength={200}
+                                placeholder="Enter your college name"
                                 className="w-full px-4 py-2.5 rounded-lg border border-gray-200 bg-gray-50 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all"
                             />
                         </div>
@@ -226,12 +255,10 @@ export default function ProfilePage() {
                     >
                         {isSaving ? (
                             <Loader2 className="w-4 h-4 animate-spin" />
-                        ) : saved ? (
-                            <span className="text-green-300">✓</span>
                         ) : (
                             <Save className="w-4 h-4" />
                         )}
-                        {isSaving ? "Saving..." : saved ? "Saved!" : "Save Changes"}
+                        {isSaving ? "Saving..." : "Save Changes"}
                     </button>
                 </div>
 
