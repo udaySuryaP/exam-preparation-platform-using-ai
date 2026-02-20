@@ -19,6 +19,7 @@ export function UserProfile() {
             } = await supabase.auth.getUser();
 
             if (authUser) {
+                // Try to get profile name first, fall back to auth metadata
                 const { data: profile } = await supabase
                     .from("user_profiles")
                     .select("full_name")
@@ -66,21 +67,21 @@ export function UserProfile() {
         <div ref={menuRef} className="relative">
             {/* Dropdown menu (opens upward) */}
             {menuOpen && (
-                <div className="absolute bottom-full left-0 right-0 mb-1 bg-white border border-gray-200 rounded-lg shadow-xl z-50 py-1">
+                <div className="absolute bottom-full left-0 right-0 mb-1 bg-white border border-gray-200 rounded-lg shadow-lg z-50 py-1">
                     <button
                         onClick={() => {
                             setMenuOpen(false);
                             router.push("/profile");
                         }}
-                        className="w-full flex items-center gap-2 px-3 py-2.5 text-sm text-gray-600 hover:bg-gray-50 hover:text-gray-900 transition-colors duration-150"
+                        className="w-full flex items-center gap-2 px-3 py-2.5 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
                     >
                         <Settings className="w-4 h-4" />
                         Profile Settings
                     </button>
-                    <div className="mx-2 border-t border-gray-100 my-1" />
+                    <hr className="my-1 border-gray-100" />
                     <button
                         onClick={handleSignOut}
-                        className="w-full flex items-center gap-2 px-3 py-2.5 text-sm text-accent-red hover:bg-red-50 transition-colors duration-150"
+                        className="w-full flex items-center gap-2 px-3 py-2.5 text-sm text-red-600 hover:bg-red-50 transition-colors"
                     >
                         <LogOut className="w-4 h-4" />
                         Sign Out
@@ -91,17 +92,17 @@ export function UserProfile() {
             {/* User profile trigger */}
             <button
                 onClick={() => setMenuOpen(!menuOpen)}
-                className="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-sidebar-hover rounded-lg transition-colors duration-150"
+                className="w-full flex items-center gap-3 px-3 py-3 hover:bg-gray-100 rounded-lg transition-colors"
             >
-                <div className="w-8 h-8 bg-gradient-to-br from-accent-blue to-purple-500 rounded-full flex items-center justify-center text-xs font-bold text-white shrink-0">
+                <div className="w-9 h-9 bg-indigo-100 text-indigo-700 rounded-full flex items-center justify-center text-sm font-bold shrink-0">
                     {initials || "U"}
                 </div>
                 <div className="flex-1 min-w-0 text-left">
-                    <p className="text-sm font-medium text-sidebar-text truncate">{user.name}</p>
-                    <p className="text-xs text-sidebar-text-tertiary truncate">{user.email}</p>
+                    <p className="text-sm font-medium text-gray-900 truncate">{user.name}</p>
+                    <p className="text-xs text-gray-500 truncate">{user.email}</p>
                 </div>
                 <ChevronUp
-                    className={`w-4 h-4 text-sidebar-text-tertiary transition-transform duration-200 ${menuOpen ? "rotate-180" : ""
+                    className={`w-4 h-4 text-gray-400 transition-transform ${menuOpen ? "rotate-180" : ""
                         }`}
                 />
             </button>

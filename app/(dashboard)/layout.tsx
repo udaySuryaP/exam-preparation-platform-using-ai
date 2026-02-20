@@ -17,78 +17,78 @@ export default function DashboardLayout({
     const closeSidebar = () => setSidebarOpen(false);
 
     return (
-        <div className="flex h-screen bg-main-bg">
+        <div className="flex h-screen bg-gray-50">
             {/* Mobile overlay */}
             {sidebarOpen && (
                 <div
-                    className="fixed inset-0 bg-black/50 backdrop-blur-sm z-40 lg:hidden"
+                    className="fixed inset-0 bg-black/40 z-40 lg:hidden"
                     onClick={closeSidebar}
                 />
             )}
 
-            {/* Sidebar - Dark Theme */}
+            {/* Sidebar */}
             <aside
-                className={`fixed inset-y-0 left-0 z-50 w-[280px] bg-sidebar-bg border-r border-sidebar-border flex flex-col transform transition-transform duration-300 ease-in-out lg:relative lg:translate-x-0 ${sidebarOpen ? "translate-x-0" : "-translate-x-full"
+                className={`fixed inset-y-0 left-0 z-50 w-[280px] bg-white border-r border-gray-200 flex flex-col transform transition-transform duration-300 ease-in-out lg:relative lg:translate-x-0 ${sidebarOpen ? "translate-x-0" : "-translate-x-full"
                     }`}
             >
                 {/* Logo */}
-                <div className="flex items-center justify-between h-[60px] px-4 border-b border-sidebar-border">
+                <div className="flex items-center justify-between h-16 px-5 border-b border-gray-100">
                     <div className="flex items-center gap-2.5">
-                        <div className="w-8 h-8 bg-gradient-to-br from-accent-blue to-purple-500 rounded-lg flex items-center justify-center">
+                        <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center">
                             <GraduationCap className="w-5 h-5 text-white" />
                         </div>
-                        <span className="text-base font-semibold text-sidebar-text tracking-tight">
+                        <span className="text-base font-bold text-gray-900">
                             KTU Exam Prep
                         </span>
                     </div>
                     <button
                         onClick={closeSidebar}
-                        className="lg:hidden p-1.5 rounded-md text-sidebar-text-secondary hover:text-sidebar-text hover:bg-sidebar-hover transition-all duration-150"
+                        className="lg:hidden p-1.5 hover:bg-gray-100 rounded-md"
                     >
-                        <X className="w-5 h-5" />
+                        <X className="w-5 h-5 text-gray-500" />
                     </button>
                 </div>
 
                 {/* New Chat Button */}
-                <div className="px-3 pt-4 pb-2">
+                <div className="px-5 py-4">
                     <NewChatButton onNavigate={closeSidebar} />
                 </div>
 
                 {/* Navigation Links */}
-                <div className="px-3 pb-2">
+                <div className="px-3">
                     <NavigationLinks onNavigate={closeSidebar} />
                 </div>
 
                 {/* Divider */}
-                <div className="mx-3 border-t border-sidebar-border" />
+                <hr className="mx-5 my-2 border-gray-100" />
 
                 {/* Recent Chats (scrollable, takes remaining space) */}
                 <RecentChats onNavigate={closeSidebar} />
 
                 {/* Divider */}
-                <div className="mx-3 border-t border-sidebar-border" />
+                <hr className="mx-5 border-gray-100" />
 
                 {/* User Profile (fixed bottom) */}
-                <div className="px-2 py-2">
+                <div className="px-3 py-2">
                     <UserProfile />
                 </div>
             </aside>
 
-            {/* Main Content - Light Theme */}
-            <main className="flex-1 flex flex-col min-w-0 bg-main-bg">
+            {/* Main Content */}
+            <main className="flex-1 flex flex-col min-w-0">
                 {/* Mobile header */}
-                <div className="lg:hidden flex items-center h-14 px-4 bg-white border-b border-main-border">
+                <div className="lg:hidden flex items-center h-14 px-4 bg-white border-b border-gray-200">
                     <button
                         onClick={() => setSidebarOpen(true)}
-                        className="p-2 hover:bg-main-surface rounded-lg -ml-2 transition-colors duration-150"
+                        className="p-2 hover:bg-gray-100 rounded-lg -ml-2"
                     >
-                        <Menu className="w-5 h-5 text-main-text-secondary" />
+                        <Menu className="w-5 h-5 text-gray-600" />
                     </button>
                     <div className="flex items-center gap-2 ml-3">
-                        <div className="w-6 h-6 bg-gradient-to-br from-accent-blue to-purple-500 rounded-md flex items-center justify-center">
+                        <div className="w-6 h-6 bg-indigo-600 rounded-md flex items-center justify-center">
                             <GraduationCap className="w-4 h-4 text-white" />
                         </div>
-                        <span className="text-sm font-semibold text-main-text">
+                        <span className="text-sm font-semibold text-gray-900">
                             KTU Exam Prep
                         </span>
                     </div>

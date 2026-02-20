@@ -89,17 +89,11 @@ export async function POST(request: Request) {
         }
 
         // Save user message
-        const { error: userMsgError } = await supabase.from("messages").insert({
+        await supabase.from("messages").insert({
             conversation_id: convId,
             role: "user",
             content: message.trim(),
         });
-
-        if (userMsgError) {
-            console.error("[API/chat] Failed to save user message:", userMsgError);
-        } else {
-            console.log("[API/chat] User message saved for conversation:", convId);
-        }
 
         // Get conversation history
         const { data: history } = await supabase
@@ -117,18 +111,12 @@ export async function POST(request: Request) {
         );
 
         // Save AI message
-        const { error: aiMsgError } = await supabase.from("messages").insert({
+        await supabase.from("messages").insert({
             conversation_id: convId,
             role: "assistant",
             content: answer,
             sources,
         });
-
-        if (aiMsgError) {
-            console.error("[API/chat] Failed to save AI message:", aiMsgError);
-        } else {
-            console.log("[API/chat] AI message saved for conversation:", convId);
-        }
 
         // Update conversation timestamp
         await supabase
@@ -141,8 +129,7 @@ export async function POST(request: Request) {
             sources,
             conversationId: convId,
         });
-    } catch (err) {
-        console.error("[API/chat] Unhandled error:", err);
+    } catch {
         return NextResponse.json(
             { error: "Internal server error" },
             { status: 500 }

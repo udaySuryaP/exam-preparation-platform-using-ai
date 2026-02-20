@@ -18,9 +18,9 @@ export function NewChatButton({ onNavigate }: NewChatButtonProps) {
     return (
         <button
             onClick={handleClick}
-            className="w-full flex items-center justify-center gap-2 h-[44px] border border-sidebar-border rounded-lg text-sm font-medium text-sidebar-text hover:bg-sidebar-hover hover:border-sidebar-text-secondary active:scale-[0.98] transition-all duration-150 cursor-pointer"
+            className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-indigo-600 text-white font-medium rounded-lg hover:bg-indigo-700 active:scale-[0.98] transition-all duration-200 text-sm h-[44px]"
         >
-            <Plus className="w-[18px] h-[18px]" strokeWidth={2} />
+            <Plus className="w-4 h-4" />
             New Chat
         </button>
     );

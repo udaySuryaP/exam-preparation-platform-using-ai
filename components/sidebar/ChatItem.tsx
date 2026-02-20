@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { MessageSquare } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ChatItemMenu } from "./ChatItemMenu";
@@ -53,23 +53,19 @@ export function ChatItem({ id, title, isActive, onRename, onDelete, onNavigate }
         <div
             onClick={handleClick}
             className={cn(
-                "group flex items-center gap-2.5 h-[44px] px-3 mx-2 rounded-lg mb-0.5 cursor-pointer transition-all duration-150",
+                "group flex items-center gap-2.5 h-12 px-3 rounded-md mb-1 cursor-pointer transition-all duration-150",
                 isActive
-                    ? "bg-sidebar-surface text-sidebar-text"
-                    : "text-sidebar-text-secondary hover:bg-sidebar-hover hover:text-sidebar-text"
+                    ? "bg-indigo-50 border-l-[3px] border-indigo-600"
+                    : "hover:bg-gray-100"
             )}
         >
-            {/* Icon */}
-            <div
+            <MessageSquare
                 className={cn(
-                    "w-7 h-7 min-w-7 rounded-md flex items-center justify-center text-base shrink-0",
-                    isActive ? "bg-sidebar-hover" : "bg-transparent"
+                    "w-[18px] h-[18px] shrink-0",
+                    isActive ? "text-indigo-600" : "text-gray-400"
                 )}
-            >
-                <MessageSquare className="w-4 h-4" />
-            </div>
+            />
 
-            {/* Title or Rename Input */}
             {isRenaming ? (
                 <input
                     autoFocus
@@ -79,15 +75,19 @@ export function ChatItem({ id, title, isActive, onRename, onDelete, onNavigate }
                     onKeyDown={handleRenameKeyDown}
                     onClick={(e) => e.stopPropagation()}
                     maxLength={100}
-                    className="flex-1 min-w-0 text-sm bg-sidebar-bg border border-accent-blue rounded px-1.5 py-0.5 text-sidebar-text focus:outline-none focus:ring-1 focus:ring-accent-blue"
+                    className="flex-1 min-w-0 text-sm bg-white border border-indigo-300 rounded px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-indigo-500"
                 />
             ) : (
-                <span className="flex-1 min-w-0 text-sm font-normal truncate">
+                <span
+                    className={cn(
+                        "flex-1 min-w-0 text-sm font-medium truncate",
+                        isActive ? "text-indigo-900" : "text-gray-700"
+                    )}
+                >
                     {title}
                 </span>
             )}
 
-            {/* Menu */}
             {!isRenaming && (
                 <ChatItemMenu
                     chatId={id}

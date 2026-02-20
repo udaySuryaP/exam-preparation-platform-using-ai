@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useCallback, useEffect, useRef } from "react";
-import { useSearchParams, useRouter } from "next/navigation";
+import { useState, useCallback, useEffect } from "react";
+import { useSearchParams } from "next/navigation";
 import { GraduationCap, BookOpen, Brain, Target } from "lucide-react";
 import { MessageList } from "./MessageList";
 import { InputBox } from "./InputBox";
@@ -27,7 +27,6 @@ const SUGGESTED_PROMPTS = [
 
 export function ChatInterface() {
     const searchParams = useSearchParams();
-    const router = useRouter();
     const conversationId = searchParams.get("id");
 
     const [messages, setMessages] = useState<Message[]>([]);
@@ -37,22 +36,12 @@ export function ChatInterface() {
         string | null
     >(conversationId);
 
-    // Track if we just created a conversation in this session to avoid re-fetching
-    const justCreatedRef = useRef(false);
-
     // Load existing messages when navigating to a conversation
     useEffect(() => {
         setCurrentConversationId(conversationId);
 
         if (!conversationId) {
             setMessages([]);
-            justCreatedRef.current = false;
-            return;
-        }
-
-        // Skip re-fetch if we just created this conversation (messages are already in state)
-        if (justCreatedRef.current) {
-            justCreatedRef.current = false;
             return;
         }
 
@@ -61,33 +50,27 @@ export function ChatInterface() {
             try {
                 const { createClient } = await import("@/lib/supabase/client");
                 const supabase = createClient();
-                const { data, error } = await supabase
+                const { data } = await supabase
                     .from("messages")
                     .select("*")
                     .eq("conversation_id", conversationId)
                     .order("created_at", { ascending: true });
 
-                console.log("[ChatInterface] loadMessages for:", conversationId);
-                console.log("[ChatInterface] raw data:", data);
-                console.log("[ChatInterface] error:", error);
-
                 if (data && data.length > 0) {
-                    const mapped = data.map((m) => ({
-                        id: m.id,
-                        conversation_id: m.conversation_id,
-                        role: m.role as "user" | "assistant",
-                        content: m.content,
-                        sources: m.sources,
-                        created_at: m.created_at,
-                    }));
-                    console.log("[ChatInterface] mapped messages:", mapped);
-                    setMessages(mapped);
+                    setMessages(
+                        data.map((m) => ({
+                            id: m.id,
+                            conversation_id: m.conversation_id,
+                            role: m.role as "user" | "assistant",
+                            content: m.content,
+                            sources: m.sources,
+                            created_at: m.created_at,
+                        }))
+                    );
                 } else {
-                    console.log("[ChatInterface] no messages found, setting empty");
                     setMessages([]);
                 }
-            } catch (err) {
-                console.error("[ChatInterface] loadMessages error:", err);
+            } catch {
                 setMessages([]);
             }
             setIsLoadingHistory(false);
@@ -108,21 +91,6 @@ export function ChatInterface() {
 
             setMessages((prev) => [...prev, userMessage]);
             setIsLoading(true);
-
-            // If this is a new conversation, poll sidebar updates while API creates conversation
-            const isNewConversation = !currentConversationId;
-            const pollTimers: ReturnType<typeof setTimeout>[] = [];
-            if (isNewConversation) {
-                // Fire at staggered intervals so sidebar picks up the new conversation
-                // as soon as it's created in the DB (before AI finishes responding)
-                [1000, 3000, 5000].forEach((delay) => {
-                    pollTimers.push(
-                        setTimeout(() => {
-                            window.dispatchEvent(new CustomEvent("conversation-created"));
-                        }, delay)
-                    );
-                });
-            }
 
             try {
                 const res = await fetch("/api/chat", {
@@ -150,14 +118,10 @@ export function ChatInterface() {
                 };
 
                 setMessages((prev) => [...prev, aiMessage]);
-                if (isNewConversation && data.conversationId) {
+                if (!currentConversationId && data.conversationId) {
                     setCurrentConversationId(data.conversationId);
-                    // Mark that we just created this conversation so the useEffect
-                    // doesn't re-fetch and overwrite our local messages
-                    justCreatedRef.current = true;
-                    router.replace(`/chat?id=${data.conversationId}`, { scroll: false });
-                    // Final refresh to ensure sidebar has the latest data
-                    window.dispatchEvent(new CustomEvent("conversation-created"));
+                    // Update URL so sidebar highlights this conversation
+                    window.history.replaceState(null, "", `/chat?id=${data.conversationId}`);
                 }
             } catch (error) {
                 const errorMessage: Message = {
@@ -171,11 +135,9 @@ export function ChatInterface() {
                 setMessages((prev) => [...prev, errorMessage]);
             } finally {
                 setIsLoading(false);
-                // Clear any pending poll timers since we got the response
-                pollTimers.forEach(clearTimeout);
             }
         },
-        [currentConversationId, router]
+        [currentConversationId]
     );
 
     const handleRegenerate = useCallback(() => {
@@ -189,33 +151,19 @@ export function ChatInterface() {
         }
     }, [messages, sendMessage]);
 
-    // Loading history state (shown when refreshing on an existing chat)
-    if (isLoadingHistory) {
+    // Empty state
+    if (messages.length === 0) {
         return (
-            <div className="flex-1 flex flex-col bg-main-bg">
-                <div className="flex-1 flex items-center justify-center">
-                    <div className="flex flex-col items-center gap-3">
-                        <div className="w-8 h-8 border-2 border-accent-blue border-t-transparent rounded-full animate-spin" />
-                        <p className="text-sm text-main-text-tertiary">Loading conversation...</p>
-                    </div>
-                </div>
-            </div>
-        );
-    }
-
-    // Empty state - only show when there's no active conversation
-    if (messages.length === 0 && !conversationId) {
-        return (
-            <div className="flex-1 flex flex-col bg-main-bg">
+            <div className="flex-1 flex flex-col">
                 <div className="flex-1 flex items-center justify-center p-6">
                     <div className="text-center max-w-lg animate-fade-in">
-                        <div className="w-20 h-20 bg-accent-blue rounded-2xl flex items-center justify-center mx-auto mb-6 shadow-lg">
-                            <GraduationCap className="w-10 h-10 text-white" />
+                        <div className="w-20 h-20 bg-indigo-100 rounded-2xl flex items-center justify-center mx-auto mb-6">
+                            <GraduationCap className="w-10 h-10 text-indigo-600" />
                         </div>
-                        <h2 className="text-[28px] font-semibold text-main-text mb-2 tracking-tight">
+                        <h2 className="text-2xl font-bold text-gray-900 mb-2">
                             Start a Conversation
                         </h2>
-                        <p className="text-main-text-tertiary mb-8 text-[15px] leading-relaxed">
+                        <p className="text-gray-500 mb-8">
                             Ask anything from your KTU syllabus and get instant, AI-powered
                             answers.
                         </p>
@@ -225,14 +173,14 @@ export function ChatInterface() {
                                 <button
                                     key={i}
                                     onClick={() => sendMessage(prompt.text)}
-                                    className="w-full flex items-center gap-3 px-4 py-3.5 bg-white border border-main-border rounded-xl hover:border-accent-blue/30 hover:shadow-md transition-all duration-200 text-left group cursor-pointer"
+                                    className="w-full flex items-center gap-3 px-4 py-3.5 bg-white border border-gray-200 rounded-xl hover:border-indigo-300 hover:shadow-sm transition-all duration-200 text-left group"
                                 >
                                     <div
                                         className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${prompt.color}`}
                                     >
                                         <prompt.icon className="w-4 h-4" />
                                     </div>
-                                    <span className="text-sm text-main-text-secondary group-hover:text-main-text transition-colors duration-150">
+                                    <span className="text-sm text-gray-700 group-hover:text-indigo-700 transition-colors">
                                         {prompt.text}
                                     </span>
                                 </button>
@@ -246,7 +194,7 @@ export function ChatInterface() {
     }
 
     return (
-        <div className="flex-1 flex flex-col min-h-0 bg-main-bg">
+        <div className="flex-1 flex flex-col min-h-0">
             <MessageList
                 messages={messages}
                 isLoading={isLoading}
