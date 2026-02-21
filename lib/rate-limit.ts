@@ -1,25 +1,17 @@
 /**
- * Simple in-memory rate limiter.
- * For production at scale, replace with Upstash Redis rate limiter.
+ * Rate limiter using Upstash Redis.
+ * Works correctly across all serverless instances and devices.
+ * Fallback: if env vars are missing (local dev), allows all requests.
  */
 
-const rateMap = new Map<string, { count: number; resetAt: number }>();
-
-// Clean old entries every 5 minutes
-setInterval(() => {
-    const now = Date.now();
-    for (const [key, value] of rateMap) {
-        if (value.resetAt < now) {
-            rateMap.delete(key);
-        }
-    }
-}, 5 * 60 * 1000);
+import { Ratelimit } from "@upstash/ratelimit";
+import { Redis } from "@upstash/redis";
 
 export interface RateLimitConfig {
     /** Max requests per window */
     maxRequests: number;
-    /** Window duration in milliseconds */
-    windowMs: number;
+    /** Window duration in seconds */
+    windowSeconds: number;
 }
 
 export interface RateLimitResult {
@@ -28,60 +20,62 @@ export interface RateLimitResult {
     resetAt: number;
 }
 
-export function checkRateLimit(
-    key: string,
-    config: RateLimitConfig
-): RateLimitResult {
-    const now = Date.now();
-    const entry = rateMap.get(key);
-
-    if (!entry || entry.resetAt < now) {
-        // First request or window expired
-        rateMap.set(key, { count: 1, resetAt: now + config.windowMs });
-        return {
-            allowed: true,
-            remaining: config.maxRequests - 1,
-            resetAt: now + config.windowMs,
-        };
+// Lazily create the Redis client so missing env vars in dev don't crash at import time
+let redis: Redis | null = null;
+function getRedis(): Redis | null {
+    if (!process.env.UPSTASH_REDIS_REST_URL || !process.env.UPSTASH_REDIS_REST_TOKEN) {
+        return null;
     }
-
-    if (entry.count >= config.maxRequests) {
-        return {
-            allowed: false,
-            remaining: 0,
-            resetAt: entry.resetAt,
-        };
+    if (!redis) {
+        redis = new Redis({
+            url: process.env.UPSTASH_REDIS_REST_URL,
+            token: process.env.UPSTASH_REDIS_REST_TOKEN,
+        });
     }
-
-    entry.count++;
-    return {
-        allowed: true,
-        remaining: config.maxRequests - entry.count,
-        resetAt: entry.resetAt,
-    };
+    return redis;
 }
 
+// Cache limiters by key so we don't recreate them on every request
+const limiterCache = new Map<string, Ratelimit>();
 
-// lib/rate-limit.ts
-// Rate limiting disabled (serverless-safe)
+function getLimiter(config: RateLimitConfig): Ratelimit | null {
+    const r = getRedis();
+    if (!r) return null;
 
-// export interface RateLimitConfig {
-//     maxRequests: number;
-//     windowMs: number;
-// }
+    const cacheKey = `${config.maxRequests}:${config.windowSeconds}`;
+    if (!limiterCache.has(cacheKey)) {
+        limiterCache.set(
+            cacheKey,
+            new Ratelimit({
+                redis: r,
+                limiter: Ratelimit.slidingWindow(config.maxRequests, `${config.windowSeconds} s`),
+                analytics: false,
+            })
+        );
+    }
+    return limiterCache.get(cacheKey)!;
+}
 
-// export interface RateLimitResult {
-//     allowed: boolean;
-//     remaining: number;
-//     resetAt: number;
-// }
+export async function checkRateLimit(
+    key: string,
+    config: RateLimitConfig
+): Promise<RateLimitResult> {
+    const limiter = getLimiter(config);
 
-// export function checkRateLimit(): RateLimitResult {
-//     return {
-//         allowed: true,
-//         remaining: Infinity,
-//         resetAt: Date.now(),
-//     };
-// }
+    // Graceful degradation: if Redis is not configured, allow all requests
+    if (!limiter) {
+        console.warn("[RateLimit] Upstash Redis not configured — rate limiting is disabled.");
+        return {
+            allowed: true,
+            remaining: config.maxRequests,
+            resetAt: Date.now() + config.windowSeconds * 1000,
+        };
+    }
 
-
+    const result = await limiter.limit(key);
+    return {
+        allowed: result.success,
+        remaining: result.remaining,
+        resetAt: result.reset,
+    };
+}

@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useEffect } from "react";
 import { useSearchParams } from "next/navigation";
-import { GraduationCap, BookOpen, Brain, Target } from "lucide-react";
+import { GraduationCap, BookOpen, Brain, Target, Loader2 } from "lucide-react";
 import { MessageList } from "./MessageList";
 import { InputBox } from "./InputBox";
 import type { Message } from "@/types";
@@ -129,7 +129,9 @@ export function ChatInterface() {
                     conversation_id: currentConversationId || "",
                     role: "assistant",
                     content:
-                        "I apologize, but I encountered an error processing your request. Please try again.",
+                        error instanceof Error && error.message.includes("Too many requests")
+                            ? "⏱️ You're sending messages too fast. Please wait a moment before trying again."
+                            : "I apologize, but I encountered an error processing your request. Please try again.",
                     created_at: new Date().toISOString(),
                 };
                 setMessages((prev) => [...prev, errorMessage]);
@@ -141,15 +143,25 @@ export function ChatInterface() {
     );
 
     const handleRegenerate = useCallback(() => {
-        if (messages.length < 2) return;
-        const lastUserMsg = [...messages]
-            .reverse()
-            .find((m) => m.role === "user");
-        if (lastUserMsg) {
-            setMessages((prev) => prev.slice(0, -1));
-            sendMessage(lastUserMsg.content);
-        }
+        // Find the last user message and remove everything after it
+        const lastUserIndex = [...messages].map(m => m.role).lastIndexOf("user");
+        if (lastUserIndex === -1) return;
+        const lastUserMsg = messages[lastUserIndex];
+        setMessages((prev) => prev.slice(0, lastUserIndex));
+        sendMessage(lastUserMsg.content);
     }, [messages, sendMessage]);
+
+    // Loading history state — show a spinner instead of the empty state
+    if (isLoadingHistory) {
+        return (
+            <div className="flex-1 flex items-center justify-center">
+                <div className="flex flex-col items-center gap-3 text-gray-400">
+                    <Loader2 className="w-8 h-8 animate-spin" />
+                    <p className="text-sm">Loading conversation...</p>
+                </div>
+            </div>
+        );
+    }
 
     // Empty state
     if (messages.length === 0) {

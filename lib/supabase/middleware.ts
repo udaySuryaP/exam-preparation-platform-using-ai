@@ -33,26 +33,65 @@ export async function updateSession(request: NextRequest) {
         data: { user },
     } = await supabase.auth.getUser();
 
-    // Define public routes that don't require authentication
-    const publicRoutes = ["/", "/login", "/signup", "/verify-email"];
-    // Public API routes that don't require auth (read-only public data)
-    const publicApiRoutes = ["/api/courses", "/api/patterns"];
-    const isPublicRoute =
-        publicRoutes.some((route) => request.nextUrl.pathname === route) ||
-        publicApiRoutes.some((route) => request.nextUrl.pathname === route);
+    const pathname = request.nextUrl.pathname;
 
-    // Redirect unauthenticated users to login
+    // Public routes that never require authentication
+    const publicRoutes = ["/", "/login", "/signup", "/verify-email"];
+    // Public API routes (read-only)
+    const publicApiRoutes = ["/api/courses", "/api/patterns"];
+
+    const isPublicRoute =
+        publicRoutes.some((route) => pathname === route) ||
+        publicApiRoutes.some((route) => pathname === route);
+
+    // 1. Redirect unauthenticated users to login
     if (!user && !isPublicRoute) {
         const url = request.nextUrl.clone();
         url.pathname = "/login";
         return NextResponse.redirect(url);
     }
 
-    // Redirect authenticated users away from auth pages
-    if (user && (request.nextUrl.pathname === "/login" || request.nextUrl.pathname === "/signup")) {
+    // 2. Redirect authenticated users away from auth pages
+    if (user && (pathname === "/login" || pathname === "/signup")) {
         const url = request.nextUrl.clone();
         url.pathname = "/chat";
         return NextResponse.redirect(url);
+    }
+
+    // 3. Enforce onboarding completion for authenticated dashboard routes
+    const dashboardRoutes = ["/chat", "/courses", "/patterns", "/profile"];
+    const onboardingRoutes = ["/onboarding"];
+    const isDashboardRoute = dashboardRoutes.some((r) => pathname.startsWith(r));
+    const isOnboardingRoute = onboardingRoutes.some((r) => pathname.startsWith(r));
+
+    if (user && isDashboardRoute) {
+        // Check if user has completed onboarding
+        const { data: profile } = await supabase
+            .from("user_profiles")
+            .select("onboarding_completed")
+            .eq("id", user.id)
+            .single();
+
+        if (!profile?.onboarding_completed) {
+            const url = request.nextUrl.clone();
+            url.pathname = "/onboarding/step-1";
+            return NextResponse.redirect(url);
+        }
+    }
+
+    // 4. Redirect authenticated users who completed onboarding away from onboarding steps
+    if (user && isOnboardingRoute) {
+        const { data: profile } = await supabase
+            .from("user_profiles")
+            .select("onboarding_completed")
+            .eq("id", user.id)
+            .single();
+
+        if (profile?.onboarding_completed) {
+            const url = request.nextUrl.clone();
+            url.pathname = "/chat";
+            return NextResponse.redirect(url);
+        }
     }
 
     return supabaseResponse;

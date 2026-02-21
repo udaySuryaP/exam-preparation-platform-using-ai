@@ -1,17 +1,27 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 
+const DEFAULT_LIMIT = 50;
+const MAX_LIMIT = 100;
+
 export async function GET(request: NextRequest) {
     try {
         const supabase = await createClient();
         const { searchParams } = new URL(request.url);
         const semester = searchParams.get("semester");
+        const limitParam = Number(searchParams.get("limit") ?? DEFAULT_LIMIT);
+        const offsetParam = Number(searchParams.get("offset") ?? 0);
+
+        // Validate pagination params
+        const limit = Math.min(Math.max(1, limitParam), MAX_LIMIT);
+        const offset = Math.max(0, offsetParam);
 
         let query = supabase
             .from("courses")
-            .select("*")
+            .select("*", { count: "exact" })
             .order("semester")
-            .order("course_code");
+            .order("course_code")
+            .range(offset, offset + limit - 1);
 
         if (semester) {
             const s = Number(semester);
@@ -24,7 +34,7 @@ export async function GET(request: NextRequest) {
             query = query.eq("semester", s);
         }
 
-        const { data, error } = await query;
+        const { data, error, count } = await query;
 
         if (error) {
             return NextResponse.json(
@@ -33,7 +43,12 @@ export async function GET(request: NextRequest) {
             );
         }
 
-        return NextResponse.json({ courses: data || [] });
+        return NextResponse.json({
+            courses: data || [],
+            total: count ?? 0,
+            limit,
+            offset,
+        });
     } catch {
         return NextResponse.json(
             { error: "Internal server error" },

@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { checkRateLimit } from "@/lib/rate-limit";
 
-const PROFILE_RATE_LIMIT = { maxRequests: 10, windowMs: 60 * 1000 };
+const PROFILE_RATE_LIMIT = { maxRequests: 10, windowSeconds: 60 };
 
 export async function GET() {
     try {
@@ -21,11 +21,12 @@ export async function GET() {
             .eq("id", user.id)
             .single();
 
-        // Get usage stats
+        // Count only THIS user's messages (via their conversations)
         const { count: questionCount } = await supabase
             .from("messages")
-            .select("*", { count: "exact", head: true })
-            .eq("role", "user");
+            .select("*, conversations!inner(user_id)", { count: "exact", head: true })
+            .eq("role", "user")
+            .eq("conversations.user_id", user.id);
 
         const { data: progressData } = await supabase
             .from("user_progress")
@@ -76,7 +77,7 @@ export async function PUT(request: Request) {
         }
 
         // Rate limiting
-        const rateResult = checkRateLimit(`profile:${user.id}`, PROFILE_RATE_LIMIT);
+        const rateResult = await checkRateLimit(`profile:${user.id}`, PROFILE_RATE_LIMIT);
         if (!rateResult.allowed) {
             return NextResponse.json(
                 { error: "Too many requests. Please wait a moment." },

@@ -1,10 +1,9 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-// import { generateAnswer } from "@/lib/rag/generate";
 import { checkRateLimit } from "@/lib/rate-limit";
 
 const MAX_MESSAGE_LENGTH = 5000;
-const CHAT_RATE_LIMIT = { maxRequests: 20, windowMs: 60 * 1000 }; // 20 req/min
+const CHAT_RATE_LIMIT = { maxRequests: 20, windowSeconds: 60 }; // 20 req/min per user
 
 export async function POST(request: Request) {
     try {
@@ -17,12 +16,18 @@ export async function POST(request: Request) {
             return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
         }
 
-        // Rate limiting per user
-        const rateResult = checkRateLimit(`chat:${user.id}`, CHAT_RATE_LIMIT);
+        // Rate limiting per user (Upstash Redis — works across all devices/instances)
+        const rateResult = await checkRateLimit(`chat:${user.id}`, CHAT_RATE_LIMIT);
         if (!rateResult.allowed) {
             return NextResponse.json(
-                { error: "Too many requests. Please wait a moment." },
-                { status: 429 }
+                { error: "Too many requests. Please wait a moment before sending another message." },
+                {
+                    status: 429,
+                    headers: {
+                        "X-RateLimit-Remaining": String(rateResult.remaining),
+                        "X-RateLimit-Reset": String(rateResult.resetAt),
+                    },
+                }
             );
         }
 
@@ -95,28 +100,21 @@ export async function POST(request: Request) {
             content: message.trim(),
         });
 
-        // Get conversation history
+        // Get recent conversation history (last 10 messages)
         const { data: history } = await supabase
             .from("messages")
             .select("role, content")
             .eq("conversation_id", convId)
-            .order("created_at", { ascending: true })
+            .order("created_at", { ascending: false })
             .limit(10);
 
-        // // Generate AI response
+        // TODO: Integrate OpenAI + RAG here
         // const { answer, sources } = await generateAnswer(
         //     message.trim(),
         //     courseId,
-        //     (history || []) as { role: "user" | "assistant"; content: string }[]
+        //     (history || []).reverse() as { role: "user" | "assistant"; content: string }[]
         // );
 
-        // // Save AI message
-        // await supabase.from("messages").insert({
-        //     conversation_id: convId,
-        //     role: "assistant",
-        //     content: answer,
-        //     sources,
-        // });
         const answer =
             "AI responses are not enabled yet. This feature is coming soon 🚀";
 
