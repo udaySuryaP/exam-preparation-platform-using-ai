@@ -74,11 +74,17 @@ export function SignupForm() {
                 data: {
                     full_name: data.fullName,
                 },
+                emailRedirectTo: `${window.location.origin}/verify-email`,
             },
         });
 
+        // if (signUpError) {
+        //     setError("Unable to create account. Please check your details and try again.");
+        //     return;
+        // }
         if (signUpError) {
-            setError("Unable to create account. Please check your details and try again.");
+            console.error("SUPABASE SIGNUP ERROR:", signUpError);
+            setError(signUpError.message);
             return;
         }
 
