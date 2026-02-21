@@ -276,10 +276,10 @@
 //     );
 // }
 
+
 "use client";
 
 import { useState, useMemo } from "react";
-import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -301,22 +301,44 @@ const signupSchema = z
 
 type SignupFormData = z.infer<typeof signupSchema>;
 
+function getPasswordStrength(password: string) {
+    let score = 0;
+    if (password.length >= 8) score++;
+    if (password.length >= 12) score++;
+    if (/[a-z]/.test(password) && /[A-Z]/.test(password)) score++;
+    if (/\d/.test(password)) score++;
+    if (/[^a-zA-Z0-9]/.test(password)) score++;
+
+    if (score <= 2) return { label: "Weak", color: "bg-red-500", percent: 33 };
+    if (score <= 3) return { label: "Medium", color: "bg-yellow-500", percent: 66 };
+    return { label: "Strong", color: "bg-green-500", percent: 100 };
+}
+
 export function SignupForm() {
+    const [showPassword, setShowPassword] = useState(false);
+    const [showConfirm, setShowConfirm] = useState(false);
     const [error, setError] = useState("");
     const [emailSent, setEmailSent] = useState(false);
-    const [userEmail, setUserEmail] = useState("");
-    const supabase = createClient();
+    const [email, setEmail] = useState("");
 
     const {
         register,
         handleSubmit,
+        watch,
         formState: { errors, isSubmitting },
     } = useForm<SignupFormData>({
         resolver: zodResolver(signupSchema),
     });
 
+    const passwordValue = watch("password", "");
+    const strength = useMemo(
+        () => getPasswordStrength(passwordValue),
+        [passwordValue]
+    );
+
     const onSubmit = async (data: SignupFormData) => {
         setError("");
+        const supabase = createClient();
 
         const { error } = await supabase.auth.signUp({
             email: data.email,
@@ -334,49 +356,125 @@ export function SignupForm() {
             return;
         }
 
-        setUserEmail(data.email);
+        setEmail(data.email);
         setEmailSent(true);
     };
 
+    /* ---------------- EMAIL SENT SCREEN ---------------- */
     if (emailSent) {
         return (
-            <div className="max-w-md mx-auto text-center bg-white p-8 rounded-xl shadow">
+            <div className="w-full max-w-[400px] bg-white rounded-2xl shadow-xl border p-8 text-center">
                 <Mail className="mx-auto h-12 w-12 text-indigo-600 mb-4" />
                 <h2 className="text-xl font-bold mb-2">Verify your email</h2>
-                <p className="text-gray-600">
+                <p className="text-gray-600 text-sm">
                     We’ve sent a verification link to
-                    <br />
-                    <span className="font-medium">{userEmail}</span>
                 </p>
-                <p className="text-sm text-gray-500 mt-4">
-                    Click the link in the email to activate your account.
+                <p className="font-medium mt-1">{email}</p>
+
+                <p className="text-xs text-gray-500 mt-4">
+                    Click the link in your email to activate your account.
                 </p>
+
                 <Link
                     href="/login"
                     className="inline-block mt-6 text-indigo-600 font-semibold"
                 >
-                    Go to login
+                    Go to Login
                 </Link>
             </div>
         );
     }
 
+    /* ---------------- SIGNUP FORM ---------------- */
     return (
-        <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
-            <input placeholder="Full name" {...register("fullName")} />
-            <input placeholder="Email" {...register("email")} />
-            <input type="password" placeholder="Password" {...register("password")} />
-            <input
-                type="password"
-                placeholder="Confirm password"
-                {...register("confirmPassword")}
-            />
+        <div className="w-full max-w-[400px]">
+            <div className="bg-white rounded-2xl shadow-xl border p-8">
+                <h1 className="text-2xl font-bold text-center mb-2">
+                    Create Account
+                </h1>
+                <p className="text-sm text-gray-500 text-center mb-6">
+                    Start your smart exam preparation journey
+                </p>
 
-            {error && <p className="text-red-500 text-sm">{error}</p>}
+                {error && (
+                    <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-red-600 text-sm">
+                        {error}
+                    </div>
+                )}
 
-            <button type="submit" disabled={isSubmitting}>
-                {isSubmitting ? "Creating account..." : "Create account"}
-            </button>
-        </form>
+                <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+                    <input
+                        {...register("fullName")}
+                        placeholder="Full Name"
+                        className="w-full px-4 py-3 border rounded-lg"
+                    />
+                    <input
+                        {...register("email")}
+                        placeholder="Email"
+                        className="w-full px-4 py-3 border rounded-lg"
+                    />
+
+                    <div className="relative">
+                        <input
+                            {...register("password")}
+                            type={showPassword ? "text" : "password"}
+                            placeholder="Password"
+                            className="w-full px-4 py-3 border rounded-lg pr-12"
+                        />
+                        <button
+                            type="button"
+                            onClick={() => setShowPassword(!showPassword)}
+                            className="absolute right-3 top-1/2 -translate-y-1/2"
+                        >
+                            {showPassword ? <EyeOff /> : <Eye />}
+                        </button>
+                    </div>
+
+                    {passwordValue && (
+                        <div className="h-1 bg-gray-200 rounded">
+                            <div
+                                className={`${strength.color} h-full rounded`}
+                                style={{ width: `${strength.percent}%` }}
+                            />
+                        </div>
+                    )}
+
+                    <div className="relative">
+                        <input
+                            {...register("confirmPassword")}
+                            type={showConfirm ? "text" : "password"}
+                            placeholder="Confirm Password"
+                            className="w-full px-4 py-3 border rounded-lg pr-12"
+                        />
+                        <button
+                            type="button"
+                            onClick={() => setShowConfirm(!showConfirm)}
+                            className="absolute right-3 top-1/2 -translate-y-1/2"
+                        >
+                            {showConfirm ? <EyeOff /> : <Eye />}
+                        </button>
+                    </div>
+
+                    <button
+                        type="submit"
+                        disabled={isSubmitting}
+                        className="w-full py-3 bg-indigo-600 text-white rounded-lg font-semibold"
+                    >
+                        {isSubmitting ? (
+                            <Loader2 className="animate-spin mx-auto" />
+                        ) : (
+                            "Create Account"
+                        )}
+                    </button>
+                </form>
+
+                <p className="text-sm text-center mt-6 text-gray-500">
+                    Already have an account?{" "}
+                    <Link href="/login" className="text-indigo-600 font-semibold">
+                        Sign In
+                    </Link>
+                </p>
+            </div>
+        </div>
     );
 }
