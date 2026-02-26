@@ -36,12 +36,12 @@ export async function updateSession(request: NextRequest) {
     const pathname = request.nextUrl.pathname;
 
     // Public routes that never require authentication
-    const publicRoutes = ["/", "/login", "/signup", "/verify-email"];
+    const publicRoutes = ["/", "/login", "/signup", "/verify-email", "/auth/callback"];
     // Public API routes (read-only)
     const publicApiRoutes = ["/api/courses", "/api/patterns"];
 
     const isPublicRoute =
-        publicRoutes.some((route) => pathname === route) ||
+        publicRoutes.some((route) => pathname.startsWith(route)) ||
         publicApiRoutes.some((route) => pathname === route);
 
     // 1. Redirect unauthenticated users to login

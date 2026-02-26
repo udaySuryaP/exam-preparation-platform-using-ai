@@ -1,11 +1,12 @@
 "use client";
 
 import { useState, useMemo } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { Eye, EyeOff, Loader2, Mail } from "lucide-react";
+import { Eye, EyeOff, Loader2 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 
 const signupSchema = z
@@ -36,11 +37,10 @@ function getPasswordStrength(password: string) {
 }
 
 export function SignupForm() {
+    const router = useRouter();
     const [showPassword, setShowPassword] = useState(false);
     const [showConfirm, setShowConfirm] = useState(false);
     const [error, setError] = useState("");
-    const [emailSent, setEmailSent] = useState(false);
-    const [email, setEmail] = useState("");
 
     const {
         register,
@@ -68,44 +68,26 @@ export function SignupForm() {
                 data: {
                     full_name: data.fullName,
                 },
-                emailRedirectTo: `${window.location.origin}/login`,
+                emailRedirectTo: `${window.location.origin}/auth/callback`,
             },
         });
 
         if (signUpError) {
-            // Show a generic error — never reveal whether an email is already registered
-            setError("Unable to create account. Please check your details and try again.");
+            console.error("[Signup Error]", signUpError.message);
+            if (signUpError.message.toLowerCase().includes("rate limit")) {
+                setError(
+                    "Too many sign-up attempts. Please wait a few minutes and try again, or check your inbox — the verification email may have already been sent."
+                );
+            } else {
+                // Generic message for all other errors — avoids user enumeration
+                setError("Unable to create account. Please check your details and try again.");
+            }
             return;
         }
 
-        setEmail(data.email);
-        setEmailSent(true);
+        // Redirect to the verify-email page which has the resend button
+        router.push(`/verify-email?email=${encodeURIComponent(data.email)}`);
     };
-
-    /* ---------------- EMAIL SENT SCREEN ---------------- */
-    if (emailSent) {
-        return (
-            <div className="w-full max-w-[400px] bg-white rounded-2xl shadow-xl border p-8 text-center">
-                <Mail className="mx-auto h-12 w-12 text-indigo-600 mb-4" />
-                <h2 className="text-xl font-bold mb-2">Verify your email</h2>
-                <p className="text-gray-600 text-sm">
-                    We&apos;ve sent a verification link to
-                </p>
-                <p className="font-medium mt-1">{email}</p>
-
-                <p className="text-xs text-gray-500 mt-4">
-                    Click the link in your email to activate your account.
-                </p>
-
-                <Link
-                    href="/login"
-                    className="inline-block mt-6 text-indigo-600 font-semibold"
-                >
-                    Go to Login
-                </Link>
-            </div>
-        );
-    }
 
     /* ---------------- SIGNUP FORM ---------------- */
     return (
@@ -177,10 +159,10 @@ export function SignupForm() {
                                     />
                                 </div>
                                 <span className={`text-xs font-medium ${strength.label === "Weak"
-                                        ? "text-red-500"
-                                        : strength.label === "Medium"
-                                            ? "text-yellow-500"
-                                            : "text-green-500"
+                                    ? "text-red-500"
+                                    : strength.label === "Medium"
+                                        ? "text-yellow-500"
+                                        : "text-green-500"
                                     }`}>
                                     {strength.label}
                                 </span>

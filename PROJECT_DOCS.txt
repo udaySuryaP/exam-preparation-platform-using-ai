@@ -1,0 +1,842 @@
+================================================================
+KTU EXAM PREPARATION PLATFORM — COMPLETE PROJECT DOCUMENTATION
+================================================================
+Generated: 2026-02-22
+Stack: Next.js 16, TypeScript, Tailwind CSS, Supabase, Upstash Redis
+Repository: https://github.com/udaySuryaP/exam-preparation-platform-using-ai
+================================================================
+
+
+TABLE OF CONTENTS
+-----------------
+1. Tech Stack
+2. Project Structure
+3. Environment Variables
+4. Authentication System
+5. Middleware & Route Protection
+6. Onboarding Flow
+7. Dashboard & Sidebar
+8. Chat System
+9. Backend API Routes
+10. Rate Limiting (Upstash Redis)
+11. Database Schema (Full)
+12. Row Level Security (RLS)
+13. Database Functions
+14. Security Measures
+15. What's Completed
+16. What's Remaining
+
+
+
+================================================================
+1. TECH STACK
+================================================================
+
+Frontend:
+  - Next.js 16.1.6 (App Router, Turbopack)
+  - TypeScript 5
+  - Tailwind CSS 4
+  - react-hook-form + Zod (form validation)
+  - lucide-react (icons)
+  - react-markdown + remark-gfm (markdown rendering in chat)
+
+Backend:
+  - Next.js API Routes (Server-side, inside /app/api/)
+  - Supabase (auth + PostgreSQL database)
+  - @supabase/ssr (server-side session management)
+  - @upstash/ratelimit + @upstash/redis (rate limiting)
+  - openai (installed, not yet integrated)
+
+Database:
+  - Supabase PostgreSQL
+  - pgvector extension (for AI embedding/vector search)
+
+Hosting:
+  - Local dev: npm run dev (Turbopack)
+  - Production target: Vercel
+
+
+
+================================================================
+2. PROJECT STRUCTURE
+================================================================
+
+exam-preparation-platform-using-ai/
+├── app/
+│   ├── (auth)/                    # Auth route group (no sidebar)
+│   │   ├── layout.tsx             # Plain layout for login/signup
+│   │   ├── login/page.tsx
+│   │   ├── signup/page.tsx
+│   │   └── verify-email/page.tsx
+│   ├── (dashboard)/               # Authenticated route group (with sidebar)
+│   │   ├── layout.tsx             # Dashboard layout with sidebar
+│   │   ├── chat/page.tsx
+│   │   ├── courses/page.tsx       # UI not built yet
+│   │   ├── patterns/page.tsx      # UI not built yet
+│   │   └── profile/page.tsx       # UI not built yet
+│   ├── (onboarding)/              # Onboarding route group
+│   │   ├── layout.tsx
+│   │   ├── step-1/page.tsx
+│   │   ├── step-2/page.tsx
+│   │   ├── step-3/page.tsx
+│   │   └── step-4/page.tsx
+│   ├── api/
+│   │   ├── chat/route.ts          # POST — send/receive chat messages
+│   │   ├── search/route.ts        # POST — vector search (stub)
+│   │   ├── courses/route.ts       # GET — fetch courses list
+│   │   ├── patterns/route.ts      # GET — fetch exam question patterns
+│   │   └── profile/route.ts       # GET/PUT — user profile
+│   ├── error.tsx                  # Global error boundary
+│   ├── not-found.tsx              # Custom 404 page
+│   ├── layout.tsx                 # Root layout
+│   ├── loading.tsx                # Root loading state
+│   ├── page.tsx                   # Landing page
+│   └── globals.css
+├── components/
+│   ├── auth/
+│   │   ├── LoginForm.tsx
+│   │   └── SignupForm.tsx
+│   ├── chat/
+│   │   ├── ChatInterface.tsx      # Main chat component
+│   │   ├── MessageList.tsx        # Renders message bubbles
+│   │   ├── InputBox.tsx           # Message input + send button
+│   │   └── MessageBubble.tsx      # Individual message with markdown
+│   ├── onboarding/
+│   │   ├── Step1Form.tsx
+│   │   ├── Step2Form.tsx
+│   │   ├── Step3Form.tsx
+│   │   └── Step4Form.tsx
+│   └── sidebar/
+│       ├── NewChatButton.tsx
+│       ├── NavigationLinks.tsx
+│       ├── RecentChats.tsx        # Fetches + lists recent conversations
+│       └── UserProfile.tsx        # Bottom profile section
+├── lib/
+│   ├── rate-limit.ts              # Upstash Redis rate limiter
+│   ├── utils.ts                   # cn(), getInitials(), truncate(), formatDate()
+│   └── supabase/
+│       ├── client.ts              # Browser Supabase client
+│       ├── server.ts              # Server Supabase client + service client
+│       └── middleware.ts          # Session refresh + route protection logic
+├── types/
+│   └── index.ts                   # TypeScript types (Message, Profile, Course, etc.)
+├── supabase/
+│   └── schema.sql                 # Full database schema
+├── scripts/                       # Seed scripts (placeholder)
+├── .env.local                     # Local environment variables (gitignored)
+├── .env.example                   # Template for environment variables
+├── middleware.ts                  # Next.js middleware entry (calls updateSession)
+├── next.config.ts
+└── package.json
+
+
+
+================================================================
+3. ENVIRONMENT VARIABLES
+================================================================
+
+File: .env.local (never commit this to git)
+
+  NEXT_PUBLIC_SUPABASE_URL=          Your Supabase project URL
+  NEXT_PUBLIC_SUPABASE_ANON_KEY=     Supabase anon/public key
+  SUPABASE_SERVICE_ROLE_KEY=         Supabase service role key (server-only)
+  OPENAI_API_KEY=                    OpenAI API key (not integrated yet)
+  UPSTASH_REDIS_REST_URL=            Upstash Redis REST URL
+  UPSTASH_REDIS_REST_TOKEN=          Upstash Redis REST token
+  NEXT_PUBLIC_APP_URL=               App base URL (e.g. http://localhost:3000)
+
+The NEXT_PUBLIC_ prefix means the variable is available in browser code.
+Variables without that prefix are server-only (never sent to browser).
+
+SUPABASE_SERVICE_ROLE_KEY is especially sensitive — it bypasses Row Level
+Security. It's only used server-side in /api/profile PUT to update auth
+user metadata.
+
+
+
+================================================================
+4. AUTHENTICATION SYSTEM
+================================================================
+
+Provider: Supabase Auth (email + password)
+Package: @supabase/ssr (cookie-based server-side sessions)
+
+HOW IT WORKS:
+
+  Sign Up:
+    1. User fills SignupForm (full name, email, password, confirm password)
+    2. Client-side validation via Zod schema (min 8 chars password, etc.)
+    3. Calls supabase.auth.signUp() with emailRedirectTo = /login
+    4. Supabase sends a verification email to the user
+    5. UI switches to "check your inbox" confirmation screen
+    6. User clicks the link in email → lands on /login, session is active
+
+  Login:
+    1. User fills LoginForm (email, password)
+    2. Calls supabase.auth.signInWithPassword()
+    3. On success → redirected to /chat (or wherever middleware sends them)
+    4. On failure → generic error shown (avoids leaking account existence)
+
+  Session Management:
+    - @supabase/ssr stores session in http-only cookies
+    - lib/supabase/middleware.ts refreshes the session on every request
+    - lib/supabase/server.ts creates a server-side Supabase client
+    - lib/supabase/client.ts creates a browser-side Supabase client
+
+  Sign Out:
+    - Calls supabase.auth.signOut() from the UserProfile component
+    - Middleware will redirect to /login on next request
+
+SECURITY NOTES:
+  - Error messages are generic on login/signup (no user enumeration)
+  - Rate limit error shows a friendly specific message
+  - Supabase errors are only logged to console, never shown raw to users
+
+
+
+================================================================
+5. MIDDLEWARE & ROUTE PROTECTION
+================================================================
+
+File: middleware.ts (root) → calls lib/supabase/middleware.ts → updateSession()
+
+The middleware runs on EVERY request before the page renders.
+
+LOGIC FLOW:
+  1. Refresh Supabase session (reads/writes cookies)
+  2. Get current user via supabase.auth.getUser()
+  3. If NOT logged in and route is NOT public → redirect to /login
+  4. If logged in and on /login or /signup → redirect to /chat
+  5. If logged in and accessing dashboard route (/chat, /courses, etc.)
+     → check user_profiles.onboarding_completed
+     → if false → redirect to /onboarding/step-1
+  6. If logged in and on /onboarding/* but already completed onboarding
+     → redirect to /chat
+
+Public routes (no auth needed):
+  - / (landing page)
+  - /login
+  - /signup
+  - /verify-email
+  - /api/courses (GET)
+  - /api/patterns (GET)
+
+All other routes require authentication.
+
+
+
+================================================================
+6. ONBOARDING FLOW
+================================================================
+
+Pages: /onboarding/step-1 through step-4
+Enforced by: middleware (checks onboarding_completed in user_profiles)
+
+Step 1: Basic Info
+  - Full name input
+  - Saves to: user_profiles.full_name
+
+Step 2: College & Branch
+  - College name, department/branch selection
+  - Saves to: user_profiles.college_name, branch
+
+Step 3: Semester
+  - Current semester (1–8) selection
+  - Saves to: user_profiles.semester
+
+Step 4: Referral + Completion
+  - "How did you hear about us?" (referral_source)
+  - On completion → sets onboarding_completed = true
+  - Redirects to /chat
+
+Each step calls /api/profile (PUT) to save progress incrementally.
+Once onboarding_completed = true, middleware lets user into the dashboard.
+
+
+
+================================================================
+7. DASHBOARD & SIDEBAR
+================================================================
+
+File: app/(dashboard)/layout.tsx
+
+The dashboard is a split layout:
+  LEFT: Fixed sidebar (280px wide on desktop, slides in on mobile)
+  RIGHT: Main content area (flex-1)
+
+Sidebar Components:
+  - NewChatButton     → navigates to /chat (clears current conversation)
+  - NavigationLinks   → links to /chat, /courses, /patterns, /profile
+  - RecentChats       → fetches conversations from Supabase, lists them
+                        with titles. Clicking navigates to /chat?id={convId}
+  - UserProfile       → shows avatar initials, name, email, sign out button
+
+Mobile behavior:
+  - Sidebar is hidden off-screen by default
+  - Hamburger button in top-left toggles it
+  - Black overlay closes sidebar when clicked
+  - Uses CSS transform (translate-x) animation
+
+
+
+================================================================
+8. CHAT SYSTEM
+================================================================
+
+Files:
+  - components/chat/ChatInterface.tsx  (main controller)
+  - components/chat/MessageList.tsx    (scrollable list)
+  - components/chat/MessageBubble.tsx  (individual message, renders markdown)
+  - components/chat/InputBox.tsx       (textarea + send button)
+
+HOW A CONVERSATION WORKS:
+
+  Starting a new chat:
+    1. User lands on /chat (no ?id param)
+    2. Empty state shown with suggested prompts
+    3. User types + sends → POST /api/chat (no conversationId)
+    4. API creates a new conversation row, saves user message
+    5. API saves placeholder AI response
+    6. Returns {answer, conversationId}
+    7. Frontend adds messages to state
+    8. URL updated to /chat?id={conversationId} (via window.history.replaceState)
+
+  Loading existing chat:
+    1. User clicks a conversation in RecentChats sidebar → /chat?id=xxx
+    2. ChatInterface reads ?id from URL
+    3. useEffect fires → fetches all messages from Supabase
+    4. Shows spinner while loading
+    5. Displays all messages from history
+
+  Regenerate:
+    - Finds the last user message in the array
+    - Removes everything after that user message
+    - Re-sends the same message
+
+  Current AI response:
+    ⚠️ AI IS A PLACEHOLDER. The response is always:
+    "AI responses are not enabled yet. This feature is coming soon 🚀"
+    OpenAI + RAG integration is the next major step.
+
+URL pattern: /chat?id={uuid}  — conversationId is a UUID from Supabase
+
+
+
+================================================================
+9. BACKEND API ROUTES
+================================================================
+
+All routes:
+  - Check authentication first (via supabase.auth.getUser())
+  - Apply Upstash Redis rate limiting
+  - Validate all inputs
+  - Scope all DB queries to the authenticated user
+
+---
+POST /api/chat
+---
+Rate limit: 20 requests/minute per user
+
+Request body:
+  {
+    message: string,          // max 5000 chars
+    conversationId?: string,  // UUID, optional (null = new conversation)
+    courseId?: string         // UUID, optional context
+  }
+
+Response:
+  {
+    answer: string,
+    sources: [],
+    conversationId: string
+  }
+
+What it does:
+  1. Authenticates user
+  2. Rate limits
+  3. Validates message (required, non-empty, max 5000 chars)
+  4. If conversationId provided → verifies it belongs to this user
+  5. If no conversationId → creates new conversation (title = first 50 chars)
+  6. Saves user message to messages table
+  7. Fetches last 10 messages as history (for future AI context)
+  8. Returns placeholder AI response (real OpenAI call is commented out)
+  9. Saves AI response to messages table
+  10. Updates conversation.updated_at
+  11. Returns answer + conversationId
+
+---
+GET /api/courses?semester=3&limit=50&offset=0
+---
+Rate limit: None (public route)
+Auth: Not required
+
+Query params:
+  semester: integer 1–8 (optional filter)
+  limit: integer 1–100 (default 50)
+  offset: integer 0+ (default 0, for pagination)
+
+Response:
+  {
+    courses: [...],  // array of course rows
+    total: number,   // total count for pagination
+    limit: number,
+    offset: number
+  }
+
+---
+GET /api/patterns?courseId=uuid&limit=50&offset=0
+---
+Rate limit: None (public route)
+Auth: Not required
+
+Query params:
+  courseId: valid UUID (optional filter)
+  limit, offset: pagination
+
+Response:
+  {
+    patterns: [...],  // includes joined course data
+    total, limit, offset
+  }
+
+---
+GET /api/profile
+---
+Auth: Required
+
+Response:
+  {
+    profile: {
+      full_name, email, college_name, branch, semester
+    },
+    stats: {
+      questions: number,    // count of THIS user's messages
+      studyTime: number,    // total minutes from user_progress
+      favSubject: string    // course with most study time
+    }
+  }
+
+---
+PUT /api/profile
+---
+Auth: Required
+Rate limit: 10 requests/minute per user
+
+Request body:
+  {
+    full_name: string,     // 2–100 chars
+    college_name: string,  // max 200 chars
+    branch: string,        // max 50 chars
+    semester: number       // integer 1–8
+  }
+
+What it does:
+  1. Validates all input fields
+  2. Upserts user_profiles row (insert or update)
+  3. Also updates Supabase auth user_metadata via admin API
+     (so the user's display name is consistent everywhere)
+
+---
+POST /api/search
+---
+Auth: Required
+Rate limit: 30 requests/minute per user
+Status: STUB — returns empty results. RAG not integrated yet.
+
+
+
+================================================================
+10. RATE LIMITING (UPSTASH REDIS)
+================================================================
+
+File: lib/rate-limit.ts
+
+WHY UPSTASH REDIS:
+  The old implementation used an in-memory JavaScript Map.
+  Problem: Each serverless instance has its own memory — so on Vercel
+  or any multi-instance deployment, users could bypass rate limits by
+  hitting different server instances. Someone on a phone and laptop
+  could both send 20 req/min each.
+
+  Upstash Redis is a shared external store — all instances read/write
+  the same counters, so rate limits apply globally across all devices.
+
+HOW IT WORKS:
+  - Uses sliding window algorithm (Ratelimit.slidingWindow)
+  - Redis key format: "chat:{userId}", "search:{userId}", "profile:{userId}"
+  - Sliding window is fairer than fixed window (no burst at window reset)
+
+LIMITS:
+  | Route           | Max Requests | Window |
+  |-----------------|-------------|--------|
+  | /api/chat       | 20          | 1 min  |
+  | /api/search     | 30          | 1 min  |
+  | /api/profile PUT| 10          | 1 min  |
+
+GRACEFUL DEGRADATION:
+  If UPSTASH_REDIS_REST_URL or UPSTASH_REDIS_REST_TOKEN are missing
+  (e.g. local dev without setup), the rate limiter warns in console
+  and allows all requests. This prevents dev environment breakage.
+
+RESPONSE WHEN RATE LIMITED:
+  HTTP 429 with body: { error: "Too many requests. Please wait a moment." }
+  Headers: X-RateLimit-Remaining, X-RateLimit-Reset
+
+
+
+================================================================
+11. DATABASE SCHEMA (FULL)
+================================================================
+
+Extension: pgvector (for AI vector embeddings)
+  CREATE EXTENSION IF NOT EXISTS vector;
+
+---
+TABLE: user_profiles
+---
+CREATE TABLE user_profiles (
+  id               UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+  full_name        TEXT NOT NULL DEFAULT '',
+  email            TEXT NOT NULL DEFAULT '',
+  avatar_url       TEXT,
+  college_name     TEXT DEFAULT '',
+  graduation_year  INTEGER DEFAULT 2025,
+  branch           TEXT DEFAULT '',       -- e.g. 'CSE', 'ECE', 'ME'
+  semester         INTEGER DEFAULT 1,     -- 1 to 8
+  referral_source  TEXT,                  -- how they found the app
+  onboarding_completed BOOLEAN DEFAULT FALSE,
+  created_at       TIMESTAMPTZ DEFAULT NOW(),
+  updated_at       TIMESTAMPTZ DEFAULT NOW()  -- auto-updated via trigger
+);
+
+---
+TABLE: courses
+---
+CREATE TABLE courses (
+  id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  course_code  TEXT NOT NULL UNIQUE,  -- e.g. 'CST301'
+  course_name  TEXT NOT NULL,         -- e.g. 'Data Structures'
+  semester     INTEGER NOT NULL,
+  credits      INTEGER DEFAULT 3,
+  department   TEXT DEFAULT '',
+  description  TEXT,
+  module_count INTEGER DEFAULT 0,
+  created_at   TIMESTAMPTZ DEFAULT NOW()
+);
+
+---
+TABLE: modules
+---
+CREATE TABLE modules (
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  course_id     UUID NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
+  module_number INTEGER NOT NULL,
+  title         TEXT NOT NULL,
+  topics        TEXT[] DEFAULT '{}',  -- array of topic strings
+  hours         INTEGER DEFAULT 0,
+  created_at    TIMESTAMPTZ DEFAULT NOW()
+);
+
+---
+TABLE: syllabus_embeddings  (for AI vector search)
+---
+CREATE TABLE syllabus_embeddings (
+  id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  course_id  UUID NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
+  content    TEXT NOT NULL,          -- chunk of syllabus text
+  embedding  VECTOR(1536),           -- OpenAI text-embedding-3-small output
+  metadata   JSONB DEFAULT '{}',     -- e.g. {module: 2, topic: "Sorting"}
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+-- IVFFlat index for fast cosine similarity search:
+CREATE INDEX syllabus_embeddings_embedding_idx
+  ON syllabus_embeddings
+  USING ivfflat (embedding vector_cosine_ops)
+  WITH (lists = 100);
+
+---
+TABLE: question_patterns
+---
+CREATE TABLE question_patterns (
+  id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  course_id         UUID NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
+  topic             TEXT NOT NULL,
+  part_a_frequency  INTEGER DEFAULT 0,  -- short answer appearances
+  part_b_frequency  INTEGER DEFAULT 0,  -- medium answer appearances
+  part_c_frequency  INTEGER DEFAULT 0,  -- long answer appearances
+  total_frequency   INTEGER DEFAULT 0,
+  priority          TEXT CHECK (priority IN ('HIGH', 'MEDIUM', 'LOW')) DEFAULT 'LOW',
+  years_appeared    TEXT[] DEFAULT '{}',  -- e.g. ['2022', '2023', '2024']
+  created_at        TIMESTAMPTZ DEFAULT NOW()
+);
+
+---
+TABLE: conversations
+---
+CREATE TABLE conversations (
+  id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id    UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  title      TEXT NOT NULL DEFAULT 'New Chat',  -- first 50 chars of user's first message
+  course_id  UUID REFERENCES courses(id) ON DELETE SET NULL,  -- optional context
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()  -- auto-updated via trigger
+);
+
+---
+TABLE: messages
+---
+CREATE TABLE messages (
+  id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  conversation_id  UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  role             TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+  content          TEXT NOT NULL,
+  sources          JSONB DEFAULT '[]',  -- array of RAG source references
+  created_at       TIMESTAMPTZ DEFAULT NOW()
+);
+
+---
+TABLE: user_progress
+---
+CREATE TABLE user_progress (
+  id                   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id              UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  course_id            UUID NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
+  questions_asked      INTEGER DEFAULT 0,
+  study_time_minutes   INTEGER DEFAULT 0,
+  last_studied         TIMESTAMPTZ DEFAULT NOW(),
+  created_at           TIMESTAMPTZ DEFAULT NOW(),
+  updated_at           TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(user_id, course_id)  -- one row per user per course
+);
+
+
+
+================================================================
+12. ROW LEVEL SECURITY (RLS)
+================================================================
+
+All tables have RLS ENABLED. Without a matching policy, all access is denied.
+
+user_profiles:
+  SELECT: auth.uid() = id          (own row only)
+  INSERT: auth.uid() = id
+  UPDATE: auth.uid() = id
+
+courses:           SELECT: true (publicly readable, no auth needed)
+modules:           SELECT: true (publicly readable)
+syllabus_embeddings: SELECT: true (publicly readable for search)
+question_patterns: SELECT: true (publicly readable)
+
+conversations:
+  SELECT: auth.uid() = user_id     (own conversations only)
+  INSERT: auth.uid() = user_id
+  UPDATE: auth.uid() = user_id
+  DELETE: auth.uid() = user_id
+
+messages:
+  SELECT: EXISTS (SELECT 1 FROM conversations c
+                  WHERE c.id = messages.conversation_id
+                  AND c.user_id = auth.uid())
+  INSERT: same check
+  DELETE: same check
+  (Users can only see messages in their own conversations)
+
+user_progress:
+  SELECT: auth.uid() = user_id
+  INSERT: auth.uid() = user_id
+  UPDATE: auth.uid() = user_id
+
+NOTE: The API routes use the server-side Supabase client, which
+automatically applies RLS using the user's session token.
+The service role client (only used in /api/profile PUT) bypasses RLS,
+which is intentional for admin operations like updating auth metadata.
+
+
+
+================================================================
+13. DATABASE FUNCTIONS
+================================================================
+
+-- Vector similarity search function used by RAG:
+CREATE OR REPLACE FUNCTION match_syllabus(
+  query_embedding  VECTOR(1536),   -- embedding of the user's question
+  match_threshold  FLOAT DEFAULT 0.7,  -- minimum similarity score
+  match_count      INT DEFAULT 5,      -- number of results to return
+  filter_course_id UUID DEFAULT NULL   -- optional: restrict to one course
+)
+RETURNS TABLE (
+  id         UUID,
+  content    TEXT,   -- the matching syllabus chunk
+  similarity FLOAT,
+  metadata   JSONB
+)
+LANGUAGE plpgsql AS $$
+BEGIN
+  RETURN QUERY
+  SELECT
+    se.id,
+    se.content,
+    1 - (se.embedding <=> query_embedding) AS similarity,
+    se.metadata
+  FROM syllabus_embeddings se
+  WHERE
+    (filter_course_id IS NULL OR se.course_id = filter_course_id)
+    AND 1 - (se.embedding <=> query_embedding) > match_threshold
+  ORDER BY se.embedding <=> query_embedding
+  LIMIT match_count;
+END;
+$$;
+
+-- Auto-update trigger (fires on UPDATE of updated_at columns):
+CREATE OR REPLACE FUNCTION update_updated_at_column()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = NOW();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Triggers attached to:
+--   user_profiles.updated_at
+--   conversations.updated_at
+--   user_progress.updated_at
+
+
+
+================================================================
+14. SECURITY MEASURES
+================================================================
+
+1. AUTHENTICATION
+   - All API routes verify user via supabase.auth.getUser()
+   - Returns 401 Unauthorized if no valid session
+   - Session stored in httpOnly cookies (can't be read by JavaScript)
+
+2. AUTHORIZATION (IDOR Prevention)
+   - All DB queries are scoped to auth.uid()
+   - Conversations: verified user_id matches before reading/writing
+   - Messages: checked via JOIN to conversations.user_id
+   - RLS provides database-level enforcement as a second layer
+
+3. RATE LIMITING
+   - Upstash Redis sliding window — shared across all devices/instances
+   - Per-user keys (not per-IP) — fair and accurate
+   - Graceful fallback if Redis is unavailable
+
+4. INPUT VALIDATION
+   - All API inputs type-checked (typeof checks)
+   - String length limits enforced server-side
+   - Integers validated as actual integers (Number.isInteger)
+   - Semester validated as 1–8
+   - Course IDs validated as proper UUID format via regex
+   - Pagination params clamped to safe ranges (max 100 per page)
+
+5. ERROR MESSAGE SAFETY
+   - Raw Supabase errors never shown to users (user enumeration prevention)
+   - Specific friendly message for rate limit errors
+   - Generic message for all other auth errors
+   - Real error always logged to console for debugging
+
+6. SERVICE ROLE KEY
+   - SUPABASE_SERVICE_ROLE_KEY only used in /api/profile PUT (server-side)
+   - Used to update auth.users metadata via admin API
+   - Never exposed to client, only in server environment
+
+
+
+================================================================
+15. WHAT'S COMPLETED (SUMMARY)
+================================================================
+
+[✅] Project scaffolding (Next.js 16, TypeScript, Tailwind CSS 4)
+[✅] Supabase integration (auth + database + SSR)
+[✅] Full database schema with all tables, indexes, RLS, triggers
+[✅] Authentication: signup, login, email verification, sign out
+[✅] Session management with cookie-based @supabase/ssr
+[✅] Middleware: route protection, auth redirects, onboarding enforcement
+[✅] Onboarding: 4-step wizard, saves to user_profiles
+[✅] Dashboard layout with responsive sidebar
+[✅] Sidebar: new chat button, navigation, recent chats, user profile
+[✅] Chat UI: send messages, load history, suggested prompts, regenerate
+[✅] Chat history: loads from Supabase on conversation open
+[✅] Chat spinner while loading history (no empty-state flicker)
+[✅] API /api/chat: conversation management, message storage (AI is placeholder)
+[✅] API /api/courses: list with semester filter + pagination
+[✅] API /api/patterns: list with course filter + UUID validation + pagination
+[✅] API /api/profile: GET (with per-user stats) + PUT (with full validation)
+[✅] API /api/search: secured stub (ready for RAG integration)
+[✅] Upstash Redis rate limiting (cross-device, cross-instance)
+[✅] Input validation on all API routes
+[✅] Security: IDOR prevention, user enumeration prevention, RLS
+[✅] Error, loading, and 404 pages
+[✅] Landing page
+[✅] Mobile responsive design
+
+
+
+================================================================
+16. WHAT'S REMAINING
+================================================================
+
+HIGH PRIORITY:
+  [ ] OpenAI integration in /api/chat
+        - Install: openai is already in package.json
+        - Create lib/rag/generate.ts
+        - Implement generateAnswer(message, courseId, history)
+        - Call OpenAI chat completions API
+        - Uncomment the generateAnswer call in /api/chat/route.ts
+
+  [ ] Populate syllabus_embeddings table
+        - Write a seed script (scripts/)
+        - Fetch KTU syllabus content per course
+        - Call OpenAI text-embedding-3-small for each chunk
+        - Insert into syllabus_embeddings with course_id + metadata
+
+  [ ] Enable /api/search (RAG)
+        - Create lib/rag/search.ts
+        - Implement searchSyllabus(query, courseId)
+        - Embed user query → call match_syllabus DB function
+        - Uncomment in /api/search/route.ts
+
+MEDIUM PRIORITY:
+  [ ] Build /courses page UI
+        - Fetch from /api/courses
+        - Display by semester, filterable
+
+  [ ] Build /patterns page UI
+        - Fetch from /api/patterns
+        - Show topic frequency charts
+
+  [ ] Build /profile page UI
+        - Fetch from /api/profile (GET)
+        - Edit form → PUT to /api/profile
+        - Show stats (questions asked, study time, top subject)
+
+  [ ] Track user_progress
+        - When user sends a message in /api/chat
+        - Upsert user_progress (questions_asked++, update last_studied)
+        - This makes the profile stats meaningful
+
+  [ ] Set up custom SMTP (Resend)
+        - Create free account at resend.com
+        - Add domain or use their sandbox
+        - Configure in Supabase: Project Settings → Auth → SMTP
+        - Removes Supabase's 4 emails/hour free tier limit
+
+LOW PRIORITY:
+  [ ] Realtime sidebar update after new chat
+        - Currently uses window.history.replaceState (doesn't trigger re-render)
+        - Use Supabase Realtime or React event bus to notify RecentChats
+
+  [ ] Vercel deployment
+        - Add all env vars to Vercel project settings
+        - Set NEXT_PUBLIC_APP_URL to production domain
+
+  [ ] Admin panel to seed courses
+  [ ] Streak / gamification features
+  [ ] PWA / offline support
+
+
+================================================================
+END OF DOCUMENT
+================================================================
