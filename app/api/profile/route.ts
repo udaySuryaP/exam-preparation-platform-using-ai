@@ -28,16 +28,16 @@ export async function GET() {
             .eq("role", "user")
             .eq("conversations.user_id", user.id);
 
+        // Get study time from profile directly
+        const totalStudyTime = Math.round(profile?.study_time_minutes || 0);
+
+        // Get top subject from user_progress
         const { data: progressData } = await supabase
             .from("user_progress")
-            .select("study_time_minutes, course_id, courses(course_name)")
+            .select("course_id, courses(course_name)")
             .eq("user_id", user.id)
-            .order("study_time_minutes", { ascending: false });
-
-        const totalStudyTime = (progressData || []).reduce(
-            (sum: number, p: { study_time_minutes?: number }) => sum + (p.study_time_minutes || 0),
-            0
-        );
+            .order("study_time_minutes", { ascending: false })
+            .limit(1);
 
         const topSubject = progressData?.[0]
             ? (progressData[0] as unknown as { courses: { course_name: string } })?.courses?.course_name || "N/A"

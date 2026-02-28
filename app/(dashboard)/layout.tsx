@@ -6,6 +6,12 @@ import { NewChatButton } from "@/components/sidebar/NewChatButton";
 import { NavigationLinks } from "@/components/sidebar/NavigationLinks";
 import { RecentChats } from "@/components/sidebar/RecentChats";
 import { UserProfile } from "@/components/sidebar/UserProfile";
+import { useStudyTimer } from "@/hooks/useStudyTimer";
+
+function StudyTimerTracker() {
+    useStudyTimer();
+    return null;
+}
 
 export default function DashboardLayout({
     children,
@@ -18,7 +24,7 @@ export default function DashboardLayout({
 
     return (
         <div className="flex h-screen bg-gray-50">
-            {/* Mobile overlay */}
+            <StudyTimerTracker />
             {sidebarOpen && (
                 <div
                     className="fixed inset-0 bg-black/40 z-40 lg:hidden"

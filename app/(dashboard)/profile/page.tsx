@@ -1,8 +1,10 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { User, Loader2, Save, BookOpen, Clock, Brain, CheckCircle, AlertCircle } from "lucide-react";
+import { useState, useEffect, useMemo } from "react";
+import { User, Loader2, Save, Clock, Brain, CheckCircle, AlertCircle } from "lucide-react";
 import { DEPARTMENTS } from "@/types";
+import { CollegeSelector } from "@/components/onboarding/CollegeSelector";
+import { useLiveSessionSeconds } from "@/hooks/useStudyTimer";
 
 export default function ProfilePage() {
     const [isLoading, setIsLoading] = useState(true);
@@ -17,35 +19,55 @@ export default function ProfilePage() {
     });
     const [stats, setStats] = useState({
         questions: 0,
-        studyTime: 0,
-        favSubject: "N/A",
+        studyTime: 0, // saved minutes from DB
     });
+    const liveSessionSeconds = useLiveSessionSeconds();
+
+    // Compute live total in seconds: saved time (minutes→seconds) + unsaved session seconds
+    const totalSeconds = useMemo(
+        () => Math.round(stats.studyTime * 60) + liveSessionSeconds,
+        [stats.studyTime, liveSessionSeconds]
+    );
+    const displayHours = String(Math.floor(totalSeconds / 3600)).padStart(2, '0');
+    const displayMinutes = String(Math.floor((totalSeconds % 3600) / 60)).padStart(2, '0');
+    const displaySeconds = String(totalSeconds % 60).padStart(2, '0');
+
+    const loadStats = async () => {
+        try {
+            const res = await fetch("/api/profile");
+            if (res.ok) {
+                const data = await res.json();
+                if (data.profile) {
+                    setProfile({
+                        full_name: data.profile.full_name || "",
+                        email: data.profile.email || "",
+                        college_name: data.profile.college_name || "",
+                        branch: data.profile.branch || "",
+                        semester: data.profile.semester || 1,
+                    });
+                }
+                if (data.stats) {
+                    setStats(data.stats);
+                }
+            }
+        } catch {
+            // Profile load failed silently
+        }
+        setIsLoading(false);
+    };
 
     useEffect(() => {
-        const load = async () => {
-            try {
-                const res = await fetch("/api/profile");
-                if (res.ok) {
-                    const data = await res.json();
-                    if (data.profile) {
-                        setProfile({
-                            full_name: data.profile.full_name || "",
-                            email: data.profile.email || "",
-                            college_name: data.profile.college_name || "",
-                            branch: data.profile.branch || "",
-                            semester: data.profile.semester || 1,
-                        });
-                    }
-                    if (data.stats) {
-                        setStats(data.stats);
-                    }
-                }
-            } catch {
-                // Profile load failed silently - form shows defaults
-            }
-            setIsLoading(false);
+        loadStats();
+
+        // Re-fetch saved time when the timer flushes
+        const handleSaved = () => {
+            fetch("/api/profile")
+                .then(r => r.json())
+                .then(data => { if (data.stats) setStats(data.stats); })
+                .catch(() => { });
         };
-        load();
+        window.addEventListener("study-time-saved", handleSaved);
+        return () => window.removeEventListener("study-time-saved", handleSaved);
     }, []);
 
     const handleSave = async () => {
@@ -137,8 +159,8 @@ export default function ProfilePage() {
                 {saveMessage && (
                     <div
                         className={`mb-6 p-3 rounded-lg flex items-center gap-2 text-sm ${saveMessage.type === "success"
-                                ? "bg-green-50 border border-green-200 text-green-700"
-                                : "bg-red-50 border border-red-200 text-red-700"
+                            ? "bg-green-50 border border-green-200 text-green-700"
+                            : "bg-red-50 border border-red-200 text-red-700"
                             }`}
                     >
                         {saveMessage.type === "success" ? (
@@ -188,18 +210,11 @@ export default function ProfilePage() {
                         </div>
 
                         <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-1.5">
-                                College
-                            </label>
-                            <input
-                                type="text"
+                            <CollegeSelector
                                 value={profile.college_name}
-                                onChange={(e) =>
-                                    setProfile({ ...profile, college_name: e.target.value })
+                                onChange={(val) =>
+                                    setProfile({ ...profile, college_name: val })
                                 }
-                                maxLength={200}
-                                placeholder="Enter your college name"
-                                className="w-full px-4 py-2.5 rounded-lg border border-gray-200 bg-gray-50 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all"
                             />
                         </div>
 
@@ -267,7 +282,7 @@ export default function ProfilePage() {
                     <h3 className="text-base font-semibold text-gray-900 mb-4">
                         Usage Statistics
                     </h3>
-                    <div className="grid grid-cols-3 gap-4">
+                    <div className="grid grid-cols-2 gap-4">
                         <div className="text-center p-4 bg-indigo-50 rounded-xl">
                             <Brain className="w-6 h-6 text-indigo-600 mx-auto mb-2" />
                             <p className="text-2xl font-bold text-indigo-700">
@@ -277,17 +292,10 @@ export default function ProfilePage() {
                         </div>
                         <div className="text-center p-4 bg-blue-50 rounded-xl">
                             <Clock className="w-6 h-6 text-blue-600 mx-auto mb-2" />
-                            <p className="text-2xl font-bold text-blue-700">
-                                {stats.studyTime}m
+                            <p className="text-2xl font-bold text-blue-700 font-mono">
+                                {displayHours}:{displayMinutes}:{displaySeconds}
                             </p>
                             <p className="text-xs text-gray-500 mt-1">Study Time</p>
-                        </div>
-                        <div className="text-center p-4 bg-emerald-50 rounded-xl">
-                            <BookOpen className="w-6 h-6 text-emerald-600 mx-auto mb-2" />
-                            <p className="text-2xl font-bold text-emerald-700">
-                                {stats.favSubject}
-                            </p>
-                            <p className="text-xs text-gray-500 mt-1">Top Subject</p>
                         </div>
                     </div>
                 </div>
