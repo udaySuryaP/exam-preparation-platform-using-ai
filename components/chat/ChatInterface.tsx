@@ -123,6 +123,8 @@ export function ChatInterface() {
                     // Update URL so sidebar highlights this conversation
                     window.history.replaceState(null, "", `/chat?id=${data.conversationId}`);
                 }
+                // Notify sidebar to refresh chat list immediately
+                window.dispatchEvent(new CustomEvent("conversation-updated"));
             } catch (error) {
                 const errorMessage: Message = {
                     id: `error-${Date.now()}`,

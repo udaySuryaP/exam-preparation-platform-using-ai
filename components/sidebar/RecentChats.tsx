@@ -46,7 +46,7 @@ export function RecentChats({ onNavigate }: RecentChatsProps) {
     useEffect(() => {
         fetchConversations();
 
-        // Real-time subscription
+        // Real-time subscription via Supabase
         const channel = supabase
             .channel("conversations-changes")
             .on(
@@ -62,8 +62,15 @@ export function RecentChats({ onNavigate }: RecentChatsProps) {
             )
             .subscribe();
 
+        // Also listen for local custom events from ChatInterface
+        const handleConversationUpdated = () => {
+            fetchConversations();
+        };
+        window.addEventListener("conversation-updated", handleConversationUpdated);
+
         return () => {
             supabase.removeChannel(channel);
+            window.removeEventListener("conversation-updated", handleConversationUpdated);
         };
     }, [fetchConversations, supabase]);
 
