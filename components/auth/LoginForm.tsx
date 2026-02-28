@@ -33,18 +33,32 @@ export function LoginForm() {
         setError("");
         const supabase = createClient();
 
-        const { error: signInError } = await supabase.auth.signInWithPassword({
-            email: data.email,
-            password: data.password,
-        });
+        try {
+            const { error: signInError } = await supabase.auth.signInWithPassword({
+                email: data.email,
+                password: data.password,
+            });
 
-        if (signInError) {
-            setError("Invalid email or password. Please try again.");
-            return;
+            if (signInError) {
+                console.error("[Login Error]", signInError.message, signInError);
+                if (
+                    signInError.message.toLowerCase().includes("fetch") ||
+                    signInError.message.toLowerCase().includes("network") ||
+                    signInError.message.toLowerCase().includes("failed to fetch")
+                ) {
+                    setError("Unable to connect to the server. Please check your internet connection.");
+                } else {
+                    setError("Invalid email or password. Please try again.");
+                }
+                return;
+            }
+
+            router.push("/chat");
+            router.refresh();
+        } catch (err) {
+            console.error("[Login Error] Unexpected:", err);
+            setError("Unable to connect to the server. Please check your internet connection.");
         }
-
-        router.push("/chat");
-        router.refresh();
     };
 
     return (

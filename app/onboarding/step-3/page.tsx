@@ -4,37 +4,37 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, ArrowRight } from "lucide-react";
 import { ProgressIndicator } from "@/components/onboarding/ProgressIndicator";
-import { DepartmentCards } from "@/components/onboarding/DepartmentCards";
+import { SemesterGrid } from "@/components/onboarding/SemesterGrid";
 
-export default function Step2Page() {
+export default function Step3Page() {
     const router = useRouter();
-    const [department, setDepartment] = useState("");
+    const [semester, setSemester] = useState(0);
 
     const handleNext = () => {
         const existing = JSON.parse(localStorage.getItem("onboarding") || "{}");
         localStorage.setItem(
             "onboarding",
-            JSON.stringify({ ...existing, department })
+            JSON.stringify({ ...existing, semester })
         );
-        router.push("/step-3");
+        router.push("/onboarding/step-4");
     };
 
     return (
         <div className="bg-white rounded-2xl shadow-xl shadow-gray-200/50 border border-gray-100 p-8">
-            <ProgressIndicator currentStep={2} />
+            <ProgressIndicator currentStep={3} />
 
             <h1 className="text-2xl font-bold text-gray-900 text-center mb-2">
-                Select Your Department
+                Current Semester
             </h1>
             <p className="text-gray-500 text-sm text-center mb-8">
-                Choose your engineering branch
+                Select your current semester
             </p>
 
-            <DepartmentCards value={department} onChange={setDepartment} />
+            <SemesterGrid value={semester} onChange={setSemester} />
 
             <div className="flex gap-3 mt-8">
                 <button
-                    onClick={() => router.push("/step-1")}
+                    onClick={() => router.push("/onboarding/step-2")}
                     className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-gray-100 text-gray-700 font-semibold rounded-lg hover:bg-gray-200 transition-all duration-200 text-sm"
                 >
                     <ArrowLeft className="w-4 h-4" />
@@ -42,7 +42,7 @@ export default function Step2Page() {
                 </button>
                 <button
                     onClick={handleNext}
-                    disabled={!department}
+                    disabled={semester === 0}
                     className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-indigo-600 text-white font-semibold rounded-lg hover:bg-indigo-700 disabled:opacity-60 disabled:cursor-not-allowed transition-all duration-200 text-sm"
                 >
                     Next

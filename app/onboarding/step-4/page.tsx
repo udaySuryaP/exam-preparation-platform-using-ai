@@ -78,7 +78,7 @@ export default function Step4Page() {
 
             <div className="flex gap-3 mt-8">
                 <button
-                    onClick={() => router.push("/step-3")}
+                    onClick={() => router.push("/onboarding/step-3")}
                     className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-gray-100 text-gray-700 font-semibold rounded-lg hover:bg-gray-200 transition-all duration-200 text-sm"
                 >
                     <ArrowLeft className="w-4 h-4" />

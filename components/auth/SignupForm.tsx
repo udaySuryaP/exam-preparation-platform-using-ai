@@ -73,10 +73,23 @@ export function SignupForm() {
         });
 
         if (signUpError) {
-            console.error("[Signup Error]", signUpError.message);
+            console.error("[Signup Error]", signUpError.message, signUpError);
             if (signUpError.message.toLowerCase().includes("rate limit")) {
                 setError(
                     "Too many sign-up attempts. Please wait a few minutes and try again, or check your inbox — the verification email may have already been sent."
+                );
+            } else if (
+                signUpError.message.toLowerCase().includes("fetch") ||
+                signUpError.message.toLowerCase().includes("network") ||
+                signUpError.message.toLowerCase().includes("failed to fetch") ||
+                signUpError.message.toLowerCase().includes("err_name_not_resolved")
+            ) {
+                setError(
+                    "Unable to connect to the server. Please check your internet connection and try again."
+                );
+            } else if (signUpError.message.toLowerCase().includes("already registered")) {
+                setError(
+                    "An account with this email may already exist. Try signing in instead."
                 );
             } else {
                 // Generic message for all other errors — avoids user enumeration
@@ -91,8 +104,8 @@ export function SignupForm() {
 
     /* ---------------- SIGNUP FORM ---------------- */
     return (
-        <div className="w-full max-w-[400px]">
-            <div className="bg-white rounded-2xl shadow-xl border p-8">
+        <div className="w-full max-w-[400px] animate-slide-up-fade">
+            <div className="bg-white rounded-2xl shadow-xl shadow-gray-200/50 border border-gray-100 p-8">
                 <h1 className="text-2xl font-bold text-center mb-2">
                     Create Account
                 </h1>

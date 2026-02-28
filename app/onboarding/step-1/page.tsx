@@ -18,7 +18,7 @@ export default function Step1Page() {
             "onboarding",
             JSON.stringify({ college, graduationYear })
         );
-        router.push("/step-2");
+        router.push("/onboarding/step-2");
     };
 
     return (

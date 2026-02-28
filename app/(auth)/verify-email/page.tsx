@@ -20,7 +20,7 @@ export default function VerifyEmailPage() {
             const { data } = await supabase.auth.getSession();
             if (data.session?.user?.email_confirmed_at) {
                 // Use callback route so onboarding check runs correctly
-                window.location.href = "/auth/callback-redirect";
+                window.location.href = "/onboarding/step-1";
             }
             setChecking(false);
         };
