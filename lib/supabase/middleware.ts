@@ -36,12 +36,14 @@ export async function updateSession(request: NextRequest) {
     const pathname = request.nextUrl.pathname;
 
     // Public routes that never require authentication
-    const publicRoutes = ["/", "/login", "/signup", "/verify-email", "/auth/callback"];
+    const exactPublicRoutes = ["/", "/login", "/signup", "/verify-email"];
+    const prefixPublicRoutes = ["/auth/callback"];
     // Public API routes (read-only)
     const publicApiRoutes = ["/api/courses", "/api/patterns"];
 
     const isPublicRoute =
-        publicRoutes.some((route) => pathname.startsWith(route)) ||
+        exactPublicRoutes.includes(pathname) ||
+        prefixPublicRoutes.some((route) => pathname.startsWith(route)) ||
         publicApiRoutes.some((route) => pathname === route);
 
     // 1. Redirect unauthenticated users to login
@@ -60,19 +62,24 @@ export async function updateSession(request: NextRequest) {
 
     // 3. Enforce onboarding completion for authenticated dashboard routes
     const dashboardRoutes = ["/chat", "/courses", "/patterns", "/profile"];
-    const onboardingRoutes = ["/onboarding"];
+    const isOnboardingRoute = pathname.startsWith("/onboarding");
     const isDashboardRoute = dashboardRoutes.some((r) => pathname.startsWith(r));
-    const isOnboardingRoute = onboardingRoutes.some((r) => pathname.startsWith(r));
 
     if (user && isDashboardRoute) {
-        // Check if user has completed onboarding
-        const { data: profile } = await supabase
-            .from("user_profiles")
-            .select("onboarding_completed")
-            .eq("id", user.id)
-            .single();
+        try {
+            const { data: profile } = await supabase
+                .from("user_profiles")
+                .select("onboarding_completed")
+                .eq("id", user.id)
+                .single();
 
-        if (!profile?.onboarding_completed) {
+            if (!profile?.onboarding_completed) {
+                const url = request.nextUrl.clone();
+                url.pathname = "/onboarding/step-1";
+                return NextResponse.redirect(url);
+            }
+        } catch {
+            // Profile not found — redirect to onboarding
             const url = request.nextUrl.clone();
             url.pathname = "/onboarding/step-1";
             return NextResponse.redirect(url);
@@ -81,16 +88,20 @@ export async function updateSession(request: NextRequest) {
 
     // 4. Redirect authenticated users who completed onboarding away from onboarding steps
     if (user && isOnboardingRoute) {
-        const { data: profile } = await supabase
-            .from("user_profiles")
-            .select("onboarding_completed")
-            .eq("id", user.id)
-            .single();
+        try {
+            const { data: profile } = await supabase
+                .from("user_profiles")
+                .select("onboarding_completed")
+                .eq("id", user.id)
+                .single();
 
-        if (profile?.onboarding_completed) {
-            const url = request.nextUrl.clone();
-            url.pathname = "/chat";
-            return NextResponse.redirect(url);
+            if (profile?.onboarding_completed) {
+                const url = request.nextUrl.clone();
+                url.pathname = "/chat";
+                return NextResponse.redirect(url);
+            }
+        } catch {
+            // Profile not found — let them continue onboarding
         }
     }
 

@@ -61,45 +61,54 @@ export function SignupForm() {
         setError("");
         const supabase = createClient();
 
-        const { error: signUpError } = await supabase.auth.signUp({
-            email: data.email,
-            password: data.password,
-            options: {
-                data: {
-                    full_name: data.fullName,
+        try {
+            const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
+                email: data.email,
+                password: data.password,
+                options: {
+                    data: {
+                        full_name: data.fullName,
+                    },
                 },
-                emailRedirectTo: `${window.location.origin}/auth/callback`,
-            },
-        });
+            });
 
-        if (signUpError) {
-            console.error("[Signup Error]", signUpError.message, signUpError);
-            if (signUpError.message.toLowerCase().includes("rate limit")) {
-                setError(
-                    "Too many sign-up attempts. Please wait a few minutes and try again, or check your inbox — the verification email may have already been sent."
-                );
-            } else if (
-                signUpError.message.toLowerCase().includes("fetch") ||
-                signUpError.message.toLowerCase().includes("network") ||
-                signUpError.message.toLowerCase().includes("failed to fetch") ||
-                signUpError.message.toLowerCase().includes("err_name_not_resolved")
-            ) {
-                setError(
-                    "Unable to connect to the server. Please check your internet connection and try again."
-                );
-            } else if (signUpError.message.toLowerCase().includes("already registered")) {
-                setError(
-                    "An account with this email may already exist. Try signing in instead."
-                );
-            } else {
-                // Generic message for all other errors — avoids user enumeration
-                setError("Unable to create account. Please check your details and try again.");
+            if (signUpError) {
+                console.error("[Signup Error]", signUpError.message, signUpError);
+                if (signUpError.message.toLowerCase().includes("rate limit")) {
+                    setError("Too many sign-up attempts. Please wait a few minutes.");
+                } else if (
+                    signUpError.message.toLowerCase().includes("fetch") ||
+                    signUpError.message.toLowerCase().includes("network") ||
+                    signUpError.message.toLowerCase().includes("failed to fetch")
+                ) {
+                    setError("Unable to connect to the server. Please check your internet connection.");
+                } else if (signUpError.message.toLowerCase().includes("already registered")) {
+                    setError("An account with this email may already exist. Try signing in instead.");
+                } else {
+                    setError("Unable to create account. Please check your details and try again.");
+                }
+                return;
             }
-            return;
-        }
 
-        // Redirect to the verify-email page which has the resend button
-        router.push(`/verify-email?email=${encodeURIComponent(data.email)}`);
+            // With email confirm disabled, we get a session immediately
+            if (signUpData.user) {
+                // Create initial user_profiles row
+                await supabase.from("user_profiles").upsert({
+                    id: signUpData.user.id,
+                    full_name: data.fullName,
+                    email: data.email,
+                    onboarding_completed: false,
+                });
+
+                router.push("/onboarding/step-1");
+                router.refresh();
+            } else {
+                setError("Account created but session not available. Please try signing in.");
+            }
+        } catch (err) {
+            console.error("[Signup Error] Unexpected:", err);
+            setError("Unable to connect to the server. Please check your internet connection.");
+        }
     };
 
     /* ---------------- SIGNUP FORM ---------------- */
