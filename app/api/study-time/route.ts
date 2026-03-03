@@ -1,5 +1,8 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { checkRateLimit } from "@/lib/rate-limit";
+
+const STUDY_TIME_RATE_LIMIT = { maxRequests: 30, windowSeconds: 60 };
 
 export async function POST(request: Request) {
     try {
@@ -12,7 +15,18 @@ export async function POST(request: Request) {
             return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
         }
 
-        const body = await request.json();
+        // Rate limiting
+        const rateResult = await checkRateLimit(`study-time:${user.id}`, STUDY_TIME_RATE_LIMIT);
+        if (!rateResult.allowed) {
+            return NextResponse.json({ error: "Too many requests" }, { status: 429 });
+        }
+
+        let body;
+        try {
+            body = await request.json();
+        } catch {
+            return NextResponse.json({ error: "Invalid request body" }, { status: 400 });
+        }
         const seconds = Number(body.seconds);
 
         // Validate: must be a positive number, max 5 minutes per save (to prevent abuse)

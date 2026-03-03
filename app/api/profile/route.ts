@@ -15,6 +15,12 @@ export async function GET() {
             return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
         }
 
+        // Rate limiting
+        const rateResult = await checkRateLimit(`profile-read:${user.id}`, PROFILE_RATE_LIMIT);
+        if (!rateResult.allowed) {
+            return NextResponse.json({ error: "Too many requests" }, { status: 429 });
+        }
+
         const { data: profile } = await supabase
             .from("user_profiles")
             .select("*")
@@ -85,7 +91,12 @@ export async function PUT(request: Request) {
             );
         }
 
-        const body = await request.json();
+        let body;
+        try {
+            body = await request.json();
+        } catch {
+            return NextResponse.json({ error: "Invalid request body" }, { status: 400 });
+        }
         const { full_name, college_name, branch, semester } = body;
 
         // Validate inputs

@@ -4,6 +4,7 @@ import { checkRateLimit } from "@/lib/rate-limit";
 
 const MAX_MESSAGE_LENGTH = 5000;
 const CHAT_RATE_LIMIT = { maxRequests: 20, windowSeconds: 60 }; // 20 req/min per user
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export async function POST(request: Request) {
     try {
@@ -31,7 +32,13 @@ export async function POST(request: Request) {
             );
         }
 
-        const { message, courseId, conversationId } = await request.json();
+        let body;
+        try {
+            body = await request.json();
+        } catch {
+            return NextResponse.json({ error: "Invalid request body" }, { status: 400 });
+        }
+        const { message, courseId, conversationId } = body;
 
         // Validate message
         if (!message || typeof message !== "string") {
@@ -51,6 +58,20 @@ export async function POST(request: Request) {
         if (message.length > MAX_MESSAGE_LENGTH) {
             return NextResponse.json(
                 { error: `Message too long. Maximum ${MAX_MESSAGE_LENGTH} characters allowed.` },
+                { status: 400 }
+            );
+        }
+
+        // Validate UUID formats
+        if (courseId && !UUID_REGEX.test(courseId)) {
+            return NextResponse.json(
+                { error: "Invalid course ID format" },
+                { status: 400 }
+            );
+        }
+        if (conversationId && !UUID_REGEX.test(conversationId)) {
+            return NextResponse.json(
+                { error: "Invalid conversation ID format" },
                 { status: 400 }
             );
         }
