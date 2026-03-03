@@ -5,6 +5,9 @@ import { useRouter } from "next/navigation";
 import { LogOut, Settings, ChevronUp } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 
+// Module-scope singleton
+const supabase = createClient();
+
 export function UserProfile() {
     const router = useRouter();
     const [user, setUser] = useState<{ name: string; email: string } | null>(null);
@@ -13,7 +16,6 @@ export function UserProfile() {
 
     useEffect(() => {
         const loadUser = async () => {
-            const supabase = createClient();
             const {
                 data: { user: authUser },
             } = await supabase.auth.getUser();
@@ -48,7 +50,6 @@ export function UserProfile() {
     }, [menuOpen]);
 
     const handleSignOut = async () => {
-        const supabase = createClient();
         await supabase.auth.signOut();
         router.push("/login");
         router.refresh();

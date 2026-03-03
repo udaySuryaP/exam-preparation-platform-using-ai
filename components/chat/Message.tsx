@@ -1,18 +1,48 @@
 "use client";
 
-import { useState } from "react";
+import { useState, memo } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Copy, Check, RefreshCw } from "lucide-react";
+import type { Components } from "react-markdown";
 import type { Message as MessageType } from "@/types";
 import { cn } from "@/lib/utils";
+
+// Stable references — avoids ReactMarkdown re-initializing on every render
+const REMARK_PLUGINS = [remarkGfm];
+
+const MARKDOWN_COMPONENTS: Components = {
+    pre: ({ children }) => (
+        <pre className="relative group/code overflow-x-auto rounded-lg p-4 my-2 bg-gray-900 text-gray-100 text-xs">
+            {children}
+        </pre>
+    ),
+    code: ({ className, children, ...props }) => {
+        const isBlock = className?.includes("language-");
+        if (isBlock) {
+            return (
+                <code className={className} {...props}>
+                    {children}
+                </code>
+            );
+        }
+        return (
+            <code
+                className="bg-indigo-50 text-indigo-700 px-1.5 py-0.5 rounded text-xs font-mono"
+                {...props}
+            >
+                {children}
+            </code>
+        );
+    },
+};
 
 interface MessageProps {
     message: MessageType;
     onRegenerate?: () => void;
 }
 
-export function Message({ message, onRegenerate }: MessageProps) {
+export const Message = memo(function Message({ message, onRegenerate }: MessageProps) {
     const [copied, setCopied] = useState(false);
     const isUser = message.role === "user";
 
@@ -54,32 +84,8 @@ export function Message({ message, onRegenerate }: MessageProps) {
                     ) : (
                         <div className="prose prose-sm max-w-none prose-headings:text-gray-900 prose-p:text-gray-700 prose-strong:text-gray-900 prose-code:text-indigo-700 prose-code:bg-indigo-50 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:text-xs prose-pre:bg-gray-900 prose-pre:text-gray-100 prose-a:text-indigo-600">
                             <ReactMarkdown
-                                remarkPlugins={[remarkGfm]}
-                                components={{
-                                    pre: ({ children }) => (
-                                        <pre className="relative group/code overflow-x-auto rounded-lg p-4 my-2 bg-gray-900 text-gray-100 text-xs">
-                                            {children}
-                                        </pre>
-                                    ),
-                                    code: ({ className, children, ...props }) => {
-                                        const isBlock = className?.includes("language-");
-                                        if (isBlock) {
-                                            return (
-                                                <code className={className} {...props}>
-                                                    {children}
-                                                </code>
-                                            );
-                                        }
-                                        return (
-                                            <code
-                                                className="bg-indigo-50 text-indigo-700 px-1.5 py-0.5 rounded text-xs font-mono"
-                                                {...props}
-                                            >
-                                                {children}
-                                            </code>
-                                        );
-                                    },
-                                }}
+                                remarkPlugins={REMARK_PLUGINS}
+                                components={MARKDOWN_COMPONENTS}
                             >
                                 {message.content}
                             </ReactMarkdown>
@@ -135,4 +141,4 @@ export function Message({ message, onRegenerate }: MessageProps) {
             )}
         </div>
     );
-}
+});

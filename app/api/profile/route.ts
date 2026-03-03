@@ -21,30 +21,34 @@ export async function GET() {
             return NextResponse.json({ error: "Too many requests" }, { status: 429 });
         }
 
-        const { data: profile } = await supabase
-            .from("user_profiles")
-            .select("*")
-            .eq("id", user.id)
-            .single();
+        // Run all three independent queries in parallel
+        const [profileResult, questionCountResult, progressResult] = await Promise.all([
+            supabase
+                .from("user_profiles")
+                .select("*")
+                .eq("id", user.id)
+                .single(),
+            supabase
+                .from("messages")
+                .select("*, conversations!inner(user_id)", { count: "exact", head: true })
+                .eq("role", "user")
+                .eq("conversations.user_id", user.id),
+            supabase
+                .from("user_progress")
+                .select("course_id, courses(course_name)")
+                .eq("user_id", user.id)
+                .order("study_time_minutes", { ascending: false })
+                .limit(1),
+        ]);
 
-        // Count only THIS user's messages (via their conversations)
-        const { count: questionCount } = await supabase
-            .from("messages")
-            .select("*, conversations!inner(user_id)", { count: "exact", head: true })
-            .eq("role", "user")
-            .eq("conversations.user_id", user.id);
+        const profile = profileResult.data;
+        const questionCount = questionCountResult.count;
+        const progressData = progressResult.data;
 
         // Get study time from profile directly
         const totalStudyTime = Math.round(profile?.study_time_minutes || 0);
 
         // Get top subject from user_progress
-        const { data: progressData } = await supabase
-            .from("user_progress")
-            .select("course_id, courses(course_name)")
-            .eq("user_id", user.id)
-            .order("study_time_minutes", { ascending: false })
-            .limit(1);
-
         const topSubject = progressData?.[0]
             ? (progressData[0] as unknown as { courses: { course_name: string } })?.courses?.course_name || "N/A"
             : "N/A";

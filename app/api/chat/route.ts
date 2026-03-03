@@ -139,19 +139,19 @@ export async function POST(request: Request) {
         const answer =
             "AI responses are not enabled yet. This feature is coming soon 🚀";
 
-        // Save assistant placeholder message
-        await supabase.from("messages").insert({
-            conversation_id: convId,
-            role: "assistant",
-            content: answer,
-            sources: [],
-        });
-
-        // Update conversation timestamp
-        await supabase
-            .from("conversations")
-            .update({ updated_at: new Date().toISOString() })
-            .eq("id", convId);
+        // Save assistant message and update timestamp in parallel
+        await Promise.all([
+            supabase.from("messages").insert({
+                conversation_id: convId,
+                role: "assistant",
+                content: answer,
+                sources: [],
+            }),
+            supabase
+                .from("conversations")
+                .update({ updated_at: new Date().toISOString() })
+                .eq("id", convId),
+        ]);
 
         return NextResponse.json({
             answer,

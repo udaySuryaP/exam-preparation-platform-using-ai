@@ -60,12 +60,13 @@ export async function updateSession(request: NextRequest) {
         return NextResponse.redirect(url);
     }
 
-    // 3. Enforce onboarding completion for authenticated dashboard routes
+    // 3. Enforce onboarding completion for authenticated dashboard/onboarding routes
     const dashboardRoutes = ["/chat", "/courses", "/patterns", "/profile"];
     const isOnboardingRoute = pathname.startsWith("/onboarding");
     const isDashboardRoute = dashboardRoutes.some((r) => pathname.startsWith(r));
 
-    if (user && isDashboardRoute) {
+    // Only query the profile ONCE if we need to check onboarding status
+    if (user && (isDashboardRoute || isOnboardingRoute)) {
         try {
             const { data: profile } = await supabase
                 .from("user_profiles")
@@ -73,35 +74,28 @@ export async function updateSession(request: NextRequest) {
                 .eq("id", user.id)
                 .single();
 
-            if (!profile?.onboarding_completed) {
+            const onboardingCompleted = !!profile?.onboarding_completed;
+
+            // Redirect incomplete users away from dashboard to onboarding
+            if (isDashboardRoute && !onboardingCompleted) {
                 const url = request.nextUrl.clone();
                 url.pathname = "/onboarding/step-1";
                 return NextResponse.redirect(url);
             }
-        } catch {
-            // Profile not found — redirect to onboarding
-            const url = request.nextUrl.clone();
-            url.pathname = "/onboarding/step-1";
-            return NextResponse.redirect(url);
-        }
-    }
 
-    // 4. Redirect authenticated users who completed onboarding away from onboarding steps
-    if (user && isOnboardingRoute) {
-        try {
-            const { data: profile } = await supabase
-                .from("user_profiles")
-                .select("onboarding_completed")
-                .eq("id", user.id)
-                .single();
-
-            if (profile?.onboarding_completed) {
+            // Redirect completed users away from onboarding to dashboard
+            if (isOnboardingRoute && onboardingCompleted) {
                 const url = request.nextUrl.clone();
                 url.pathname = "/chat";
                 return NextResponse.redirect(url);
             }
         } catch {
-            // Profile not found — let them continue onboarding
+            // Profile not found — redirect to onboarding if on dashboard, let continue if on onboarding
+            if (isDashboardRoute) {
+                const url = request.nextUrl.clone();
+                url.pathname = "/onboarding/step-1";
+                return NextResponse.redirect(url);
+            }
         }
     }
 

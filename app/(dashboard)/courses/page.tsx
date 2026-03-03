@@ -5,6 +5,9 @@ import { Search, BookOpen, Filter } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import type { Course } from "@/types";
 
+// Module-scope singleton
+const supabase = createClient();
+
 export default function CoursesPage() {
     const [courses, setCourses] = useState<Course[]>([]);
     const [search, setSearch] = useState("");
@@ -13,7 +16,6 @@ export default function CoursesPage() {
 
     useEffect(() => {
         const load = async () => {
-            const supabase = createClient();
             let query = supabase.from("courses").select("*").order("semester").order("course_code");
 
             if (semesterFilter !== "all") {

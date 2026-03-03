@@ -6,6 +6,9 @@ import { MessageSquare } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { ChatItem } from "./ChatItem";
 
+// Module-scope singleton — stable reference, never triggers re-renders
+const supabase = createClient();
+
 interface Conversation {
     id: string;
     title: string;
@@ -23,8 +26,6 @@ export function RecentChats({ onNavigate }: RecentChatsProps) {
     const [conversations, setConversations] = useState<Conversation[]>([]);
     const [isLoading, setIsLoading] = useState(true);
 
-    const supabase = createClient();
-
     const fetchConversations = useCallback(async () => {
         const {
             data: { user },
@@ -41,7 +42,7 @@ export function RecentChats({ onNavigate }: RecentChatsProps) {
 
         setConversations(data || []);
         setIsLoading(false);
-    }, [supabase]);
+    }, []);
 
     useEffect(() => {
         fetchConversations();
@@ -72,7 +73,7 @@ export function RecentChats({ onNavigate }: RecentChatsProps) {
             supabase.removeChannel(channel);
             window.removeEventListener("conversation-updated", handleConversationUpdated);
         };
-    }, [fetchConversations, supabase]);
+    }, [fetchConversations]);
 
     const handleRename = async (id: string, newTitle: string) => {
         // Optimistic update

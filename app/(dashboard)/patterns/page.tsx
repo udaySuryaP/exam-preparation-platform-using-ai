@@ -6,6 +6,9 @@ import { createClient } from "@/lib/supabase/client";
 import type { QuestionPattern, Course } from "@/types";
 import { cn } from "@/lib/utils";
 
+// Module-scope singleton
+const supabase = createClient();
+
 export default function PatternsPage() {
     const [patterns, setPatterns] = useState<QuestionPattern[]>([]);
     const [courses, setCourses] = useState<Course[]>([]);
@@ -15,7 +18,6 @@ export default function PatternsPage() {
 
     useEffect(() => {
         const load = async () => {
-            const supabase = createClient();
 
             const { data: coursesData } = await supabase
                 .from("courses")

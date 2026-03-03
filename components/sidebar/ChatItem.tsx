@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, memo } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { MessageSquare } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -15,7 +15,7 @@ interface ChatItemProps {
     onNavigate?: () => void;
 }
 
-export function ChatItem({ id, title, isActive, onRename, onDelete, onNavigate }: ChatItemProps) {
+export const ChatItem = memo(function ChatItem({ id, title, isActive, onRename, onDelete, onNavigate }: ChatItemProps) {
     const router = useRouter();
     const [isRenaming, setIsRenaming] = useState(false);
     const [renameValue, setRenameValue] = useState(title);
@@ -97,4 +97,4 @@ export function ChatItem({ id, title, isActive, onRename, onDelete, onNavigate }
             )}
         </div>
     );
-}
+});
