@@ -1,0 +1,9 @@
+Embeddings count: 24
+First embedding course_id: ca57877f-3b37-4220-aa70-9cf83cb549db
+Sample content (first 100 chars): Course: Object Oriented Programming (PBCST304) — Semester 3
+Module 1: Introduction to Java and OOP C
+Sample metadata: {"topic":"Introduction to Java and Java Environment","semester":3,"course_id":"ca57877f-3b37-4220-aa70-9cf83cb549db","course_code":"PBCST304","course_name":"Object Oriented Programming","module_title":"Introduction to Java and OOP Concepts","module_number":1}
+Has embedding: yes
+Embedding type: string
+Embedding preview: "[-0.028533936,0.02897644,0.04034424,-0.01802063,0.040222168,-0.010108948,0.016159058,-0.0074272156,
+RPC (threshold=0.0) returned: 0 matches

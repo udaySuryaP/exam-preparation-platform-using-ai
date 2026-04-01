@@ -11,7 +11,7 @@ const supabase = createClient(
     process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
-const COURSE_ID = "PASTE-UUID-HERE";
+const COURSE_ID = "ca57877f-3b37-4220-aa70-9cf83cb549db";
 
 const SYLLABUS_DATA = [
     {
@@ -275,9 +275,9 @@ async function main() {
         throw new Error("NEXT_PUBLIC_SUPABASE_URL not set");
     if (!process.env.SUPABASE_SERVICE_ROLE_KEY)
         throw new Error("SUPABASE_SERVICE_ROLE_KEY not set");
-    if (COURSE_ID === "PASTE-UUID-HERE")
+    if (COURSE_ID === "REPLACE_WITH_UUID_FROM_TASK_1")
         throw new Error(
-            "Replace COURSE_ID with actual UUID from Supabase courses table. Go to Supabase → Table editor → courses → insert the row → copy UUID."
+            "You forgot to replace COURSE_ID. Run scripts/get-course-id.ts first to get the UUID."
         );
 
     await seedCourseAndModules();

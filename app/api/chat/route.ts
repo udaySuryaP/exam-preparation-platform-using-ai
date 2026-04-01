@@ -149,9 +149,11 @@ export async function POST(req: NextRequest) {
     } catch (err: unknown) {
         const errMessage =
             err instanceof Error ? err.message : "Unknown error";
-        console.error("[/api/chat]", errMessage);
+        const errStack = err instanceof Error ? err.stack : "";
+        console.error("[/api/chat] ERROR:", errMessage);
+        console.error("[/api/chat] STACK:", errStack);
         return NextResponse.json(
-            { error: "Something went wrong. Please try again." },
+            { error: process.env.NODE_ENV === "development" ? errMessage : "Something went wrong. Please try again." },
             { status: 500 }
         );
     }
