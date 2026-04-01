@@ -1,4 +1,6 @@
-REST test: status=200
-REST body (first 500): []
-Supabase client: matches: 0
-Array param: matches: 0
+Embedding length: 1536
+First 5 values: -0.018646240234375, 0.028076171875, 0.029083251953125, 0.037322998046875, 0.0362548828125
+Matches: 0
+Total embeddings in table: 24
+REST status: 200
+REST response (first 500): []
