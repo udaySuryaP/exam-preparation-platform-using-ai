@@ -1,7 +1,4 @@
-Check embedding type: status=404 body={"code":"PGRST202","details":"Searched for the function public.check_embedding_type without parameters or with a single unnamed json/jsonb parameter, but no matches were found in the schema cache.","hint":null,"message":"Could not find the function public.check_embedding_type without parameters in the schema cache"}
-Embedding raw type: string
-Embedding string length: 19212
-Starts with: [-0.028533936,0.02897644,0.040
-Parsed array length: 1536
-Direct select count: 1
-First row content: Course: Object Oriented Programming (PBCST304) — S
+REST test: status=200
+REST body (first 500): []
+Supabase client: matches: 0
+Array param: matches: 0

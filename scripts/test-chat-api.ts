@@ -1,4 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
+import OpenAI from "openai";
 import * as dotenv from "dotenv";
 import * as path from "path";
 import * as fs from "fs";
@@ -9,14 +10,18 @@ const log: string[] = [];
 function L(msg: string) { log.push(msg); }
 
 async function main() {
-  const supabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!
-  );
+  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-  // Direct REST call to check embedding column type
+  const embResponse = await openai.embeddings.create({
+    model: "text-embedding-3-small",
+    input: "Explain the four pillars of OOP",
+  });
+  const queryVec = embResponse.data[0].embedding;
+  const vecString = "[" + queryVec.join(",") + "]";
+
+  // Test 1: Direct REST API call
   const resp = await fetch(
-    process.env.NEXT_PUBLIC_SUPABASE_URL + "/rest/v1/rpc/check_embedding_type",
+    process.env.NEXT_PUBLIC_SUPABASE_URL + "/rest/v1/rpc/match_syllabus",
     {
       method: "POST",
       headers: {
@@ -24,53 +29,36 @@ async function main() {
         "Authorization": "Bearer " + process.env.SUPABASE_SERVICE_ROLE_KEY!,
         "Content-Type": "application/json",
       },
-      body: "{}",
+      body: JSON.stringify({
+        query_embedding: vecString,
+        match_threshold: 0.0,
+        match_count: 5,
+      }),
     }
   );
-  L("Check embedding type: status=" + resp.status + " body=" + await resp.text());
+  const body = await resp.text();
+  L("REST test: status=" + resp.status);
+  L("REST body (first 500): " + body.substring(0, 500));
 
-  // Alternative: use raw SQL select to see embedding length
-  const { data, error } = await supabase
-    .from("syllabus_embeddings")
-    .select("id, embedding")
-    .limit(1);
-
-  if (error) {
-    L("Select error: " + error.message);
-  } else if (data && data.length > 0) {
-    const emb = data[0].embedding;
-    L("Embedding raw type: " + typeof emb);
-    if (typeof emb === "string") {
-      L("Embedding string length: " + emb.length);
-      L("Starts with: " + emb.substring(0, 30));
-      // Check if it's a pgvector string format like "[0.1,0.2,...]"
-      if (emb.startsWith("[")) {
-        const parsed = JSON.parse(emb);
-        L("Parsed array length: " + parsed.length);
-      }
-    } else if (Array.isArray(emb)) {
-      L("Embedding array length: " + emb.length);
-    } else {
-      L("Embedding value: " + JSON.stringify(emb).substring(0, 100));
-    }
-  }
-
-  // Check if we can do a simple cosine similarity manually
-  // by re-selecting with the <=> operator via a raw RPC
-  const testResp = await fetch(
-    process.env.NEXT_PUBLIC_SUPABASE_URL + "/rest/v1/syllabus_embeddings?select=id,content&limit=1",
-    {
-      headers: {
-        "apikey": process.env.SUPABASE_SERVICE_ROLE_KEY!,
-        "Authorization": "Bearer " + process.env.SUPABASE_SERVICE_ROLE_KEY!,
-      },
-    }
+  // Test 2: Supabase client with string
+  const supabase = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!
   );
-  const testData = await testResp.json();
-  L("Direct select count: " + testData.length);
-  if (testData.length > 0) {
-    L("First row content: " + testData[0].content?.substring(0, 50));
-  }
+  const { data, error } = await supabase.rpc("match_syllabus", {
+    query_embedding: vecString,
+    match_threshold: 0.0,
+    match_count: 5,
+  });
+  L("Supabase client: " + (error ? "ERROR: " + error.message + " | " + error.hint : "matches: " + data?.length));
+
+  // Test 3: Try passing as array (how Supabase client might serialize it)
+  const { data: d2, error: e2 } = await supabase.rpc("match_syllabus", {
+    query_embedding: queryVec,
+    match_threshold: 0.0,
+    match_count: 5,
+  });
+  L("Array param: " + (e2 ? "ERROR: " + e2.message : "matches: " + d2?.length));
 
   fs.writeFileSync(
     path.resolve(process.cwd(), "scripts", "test-results.txt"),
