@@ -29,11 +29,7 @@ export function Message({ message, onRegenerate }: MessageProps) {
                 isUser ? "justify-end" : "justify-start"
             )}
         >
-            {!isUser && (
-                <div className="w-8 h-8 bg-gray-100 rounded-full flex items-center justify-center shrink-0 mt-1">
-                    <span className="text-sm">🤖</span>
-                </div>
-            )}
+
 
             <div
                 className={cn(
