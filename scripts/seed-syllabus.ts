@@ -275,10 +275,10 @@ async function main() {
         throw new Error("NEXT_PUBLIC_SUPABASE_URL not set");
     if (!process.env.SUPABASE_SERVICE_ROLE_KEY)
         throw new Error("SUPABASE_SERVICE_ROLE_KEY not set");
-    if (COURSE_ID === "REPLACE_WITH_UUID_FROM_TASK_1")
-        throw new Error(
-            "You forgot to replace COURSE_ID. Run scripts/get-course-id.ts first to get the UUID."
-        );
+    // if (COURSE_ID === "REPLACE_WITH_UUID_FROM_TASK_1")
+    //     throw new Error(
+    //         "You forgot to replace COURSE_ID. Run scripts/get-course-id.ts first to get the UUID."
+    //     );
 
     await seedCourseAndModules();
     console.log("\nClearing existing embeddings for this course...");
