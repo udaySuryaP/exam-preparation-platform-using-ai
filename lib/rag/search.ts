@@ -19,7 +19,7 @@ export async function searchSyllabus(
     query: string,
     courseId?: string,
     matchCount: number = 5,
-    matchThreshold: number = 0.65
+    matchThreshold: number = 0.5
 ): Promise<SyllabusMatch[]> {
     const embeddingResponse = await openai.embeddings.create({
         model: "text-embedding-3-small",
@@ -28,21 +28,41 @@ export async function searchSyllabus(
 
     const queryEmbedding = embeddingResponse.data[0].embedding;
 
-    const supabase = await createServiceClient();
+    // Convert to pgvector string format: "[x,y,z,...]"
+    const embeddingStr = `[${queryEmbedding.join(",")}]`;
 
-    const { data, error } = await supabase.rpc("match_syllabus", {
-        query_embedding: queryEmbedding,
-        match_threshold: matchThreshold,
-        match_count: matchCount,
-        filter_course_id: courseId ?? null,
-    });
+    // Use direct fetch to PostgREST RPC endpoint to avoid type ambiguity
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 
-    if (error) {
-        console.error("[searchSyllabus] RPC error:", error.message);
+    try {
+        const response = await fetch(`${supabaseUrl}/rest/v1/rpc/match_syllabus`, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "apikey": serviceKey,
+                "Authorization": `Bearer ${serviceKey}`,
+            },
+            body: JSON.stringify({
+                query_embedding: embeddingStr,
+                match_threshold: matchThreshold,
+                match_count: matchCount,
+                filter_course_id: courseId ?? null,
+            }),
+        });
+
+        if (!response.ok) {
+            const errText = await response.text();
+            console.error("[searchSyllabus] RPC error:", response.status, errText);
+            return [];
+        }
+
+        const data = await response.json();
+        return (data as SyllabusMatch[]) ?? [];
+    } catch (err) {
+        console.error("[searchSyllabus] fetch error:", err instanceof Error ? err.message : err);
         return [];
     }
-
-    return (data as SyllabusMatch[]) ?? [];
 }
 
 export function formatContext(matches: SyllabusMatch[]): string {

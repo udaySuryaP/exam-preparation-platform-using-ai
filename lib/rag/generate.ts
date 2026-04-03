@@ -11,8 +11,8 @@ export interface ChatMessage {
 export interface GenerateAnswerResult {
     answer: string;
     sources: Array<{
-        course: string;
-        module: number | null;
+        course_code: string;
+        module: string;
         topic: string;
         similarity: number;
     }>;
@@ -62,9 +62,10 @@ export async function generateAnswer(
     ];
 
     const completion = await openai.chat.completions.create({
-        model: "o4-mini",
+        model: "gpt-4o-mini",
         messages: conversationMessages,
-        max_completion_tokens: 1500,
+        max_tokens: 1500,
+        temperature: 0.3,
     });
 
     const answer =
@@ -72,8 +73,8 @@ export async function generateAnswer(
         "Sorry, I couldn't generate a response. Please try again.";
 
     const sources = matches.map((m) => ({
-        course: m.metadata.course_name ?? m.metadata.course_code ?? "OOPs",
-        module: m.metadata.module_number ?? null,
+        course_code: m.metadata.course_code ?? m.metadata.course_name ?? "OOPs",
+        module: m.metadata.module_number != null ? `Module ${m.metadata.module_number}` : "General",
         topic: m.metadata.topic ?? "General",
         similarity: Math.round(m.similarity * 100) / 100,
     }));

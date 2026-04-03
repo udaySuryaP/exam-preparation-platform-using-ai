@@ -72,10 +72,20 @@ export async function checkRateLimit(
         };
     }
 
-    const result = await limiter.limit(key);
-    return {
-        allowed: result.success,
-        remaining: result.remaining,
-        resetAt: result.reset,
-    };
+    try {
+        const result = await limiter.limit(key);
+        return {
+            allowed: result.success,
+            remaining: result.remaining,
+            resetAt: result.reset,
+        };
+    } catch (err) {
+        // If Upstash is unreachable, degrade gracefully and allow the request
+        console.warn("[RateLimit] Upstash error, allowing request:", err instanceof Error ? err.message : err);
+        return {
+            allowed: true,
+            remaining: config.maxRequests,
+            resetAt: Date.now() + config.windowSeconds * 1000,
+        };
+    }
 }
