@@ -34,7 +34,7 @@ export function Message({ message, onRegenerate }: MessageProps) {
             <div
                 className={cn(
                     "relative group",
-                    isUser ? "max-w-[70%]" : "max-w-[85%]"
+                    isUser ? "max-w-[70%]" : "max-w-full"
                 )}
             >
                 <div
