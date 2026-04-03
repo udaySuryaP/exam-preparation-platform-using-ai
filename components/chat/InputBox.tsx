@@ -40,7 +40,7 @@ export function InputBox({ onSend, disabled }: InputBoxProps) {
 
     return (
         <div className="border-t border-gray-100 bg-white p-4">
-            <div className="max-w-3xl mx-auto">
+            <div className="max-w-[72rem] mx-auto">
                 <div className="relative flex items-end border-2 border-gray-200 rounded-3xl bg-gray-50 focus-within:border-indigo-400 focus-within:bg-white transition-all duration-200">
                     <textarea
                         ref={textareaRef}
