@@ -1,0 +1,22 @@
+=== Test gpt-4o-mini ===
+model: gpt-4o-mini-2024-07-18
+content: Polymorphism in Java is the ability of an object to take on multiple forms. It allows methods to do different things based on the object that it is acting upon, enabling one interface to be used for d
+finish: stop
+
+=== Test o4-mini (30s timeout) ===
+o4-mini model: o4-mini-2025-04-16
+o4-mini content: (empty)
+o4-mini finish: length
+
+=== Supabase RPC (threshold=0) ===
+Results (threshold=0): 0
+
+=== Sample rows ===
+  meta={"topic":"Introduction to Java and Java Environment","semester":3,"course_id":"ca57877f-3b37-4220-aa70-9cf83cb549db","course_code":"PBCST304","course_name":"Object Oriented Programming","module_title":"Introduction to Java and OOP Concepts","module_number":1} content=Course: Object Oriented Programming (PBCST304) — Semester 3
+Module 1: Introducti
+  meta={"topic":"Java Virtual Machine and Bytecode","semester":3,"course_id":"ca57877f-3b37-4220-aa70-9cf83cb549db","course_code":"PBCST304","course_name":"Object Oriented Programming","module_title":"Introduction to Java and OOP Concepts","module_number":1} content=Course: Object Oriented Programming (PBCST304) — Semester 3
+Module 1: Introducti
+  meta={"topic":"Primitive Data Types and Wrapper Classes","semester":3,"course_id":"ca57877f-3b37-4220-aa70-9cf83cb549db","course_code":"PBCST304","course_name":"Object Oriented Programming","module_title":"Introduction to Java and OOP Concepts","module_number":1} content=Course: Object Oriented Programming (PBCST304) — Semester 3
+Module 1: Introducti
+
+=== DONE ===

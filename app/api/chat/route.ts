@@ -149,9 +149,16 @@ export async function POST(req: NextRequest) {
     } catch (err: unknown) {
         const errMessage =
             err instanceof Error ? err.message : "Unknown error";
-        console.error("[/api/chat]", errMessage);
+        const errStack = err instanceof Error ? err.stack : "";
+        const errCause = err instanceof Error && err.cause ? String((err.cause as Error).message || err.cause) : "none";
+        console.error("[/api/chat] ERROR:", errMessage, "CAUSE:", errCause);
+        // Write error to file for debugging
+        try {
+            const fs = await import("fs");
+            fs.writeFileSync("chat-error.log", `${new Date().toISOString()}\nERROR: ${errMessage}\nCAUSE: ${errCause}\nSTACK: ${errStack}\n`, "utf-8");
+        } catch { /* ignore fs errors */ }
         return NextResponse.json(
-            { error: "Something went wrong. Please try again." },
+            { error: errMessage },
             { status: 500 }
         );
     }
