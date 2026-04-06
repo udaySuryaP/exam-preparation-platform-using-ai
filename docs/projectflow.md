@@ -3807,4 +3807,623 @@ export async function generateAnswer(
 
 ---
 
-*End of Part 4. Part 5 will cover all remaining API Routes (profile, courses, patterns, study-time, search), Types, and Utilities.*
+*End of Part 4.*
+
+---
+
+# Part 5: API Routes, Types & Utilities
+
+## 5.1 API Routes Overview
+
+All API routes follow the same security pattern:
+
+```
+1. Authenticate user (Supabase session from cookies)
+2. Rate limit check (Upstash Redis sliding window)
+3. Validate inputs (type checks, length limits, UUID format)
+4. Execute business logic
+5. Return JSON response
+```
+
+### API Routes Summary Table
+
+| Route | Method | Auth | Rate Limit | Purpose |
+|-------|--------|------|------------|---------|
+| `/api/chat` | POST | Required | 20/60s per user | AI chat with RAG (covered in Part 4) |
+| `/api/search` | POST | Required | 30/60s per user | Standalone semantic search |
+| `/api/profile` | GET | Required | 30/60s per user | Fetch user profile + stats |
+| `/api/profile` | PUT | Required | 10/60s per user | Update user profile |
+| `/api/courses` | GET | Public | 60/60s per IP | Paginated course listing |
+| `/api/patterns` | GET | Public | 60/60s per IP | Paginated exam patterns |
+| `/api/study-time` | POST | Required | 30/60s per user | Increment study time |
+| `/auth/callback` | GET | — | — | PKCE code exchange (covered in Part 2) |
+
+---
+
+## 5.2 Profile API — `app/api/profile/route.ts`
+
+### GET — Fetch Profile + Statistics
+
+```typescript
+// app/api/profile/route.ts
+export async function GET(request: NextRequest) {
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+
+    if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+    // Rate limit: 30 req / 60s
+    const rateResult = await checkRateLimit(`profile-read:${user.id}`, PROFILE_READ_RATE_LIMIT);
+    if (!rateResult.allowed) { return NextResponse.json({ error: "Too many requests." }, { status: 429 }); }
+
+    // 1. Fetch the full user_profiles row
+    const { data: profile } = await supabase
+        .from("user_profiles")
+        .select("*")
+        .eq("id", user.id)
+        .single();
+
+    // 2. Count total questions asked by this user
+    // Uses an inner join: messages → conversations (filtered by user_id)
+    const { count: questionCount } = await supabase
+        .from("messages")
+        .select("*, conversations!inner(user_id)", { count: "exact", head: true })
+        .eq("role", "user")
+        .eq("conversations.user_id", user.id);
+
+    // 3. Get study time from profile
+    const totalStudyTime = Math.round(profile?.study_time_minutes || 0);
+
+    // 4. Get top subject from user_progress
+    const { data: progressData } = await supabase
+        .from("user_progress")
+        .select("course_id, courses(course_name)")
+        .eq("user_id", user.id)
+        .order("study_time_minutes", { ascending: false })
+        .limit(1);
+
+    const topSubject = progressData?.[0]
+        ? (progressData[0] as unknown as { courses: { course_name: string } })?.courses?.course_name || "N/A"
+        : "N/A";
+
+    // 5. Return combined response
+    return NextResponse.json({
+        profile: profile || {
+            full_name: user.user_metadata?.full_name || "",
+            email: user.email || "",
+            college_name: "", branch: "", semester: 1,
+        },
+        stats: {
+            questions: questionCount || 0,
+            studyTime: totalStudyTime,
+            favSubject: topSubject,
+        },
+    });
+}
+```
+
+**What it returns:**
+
+```json
+{
+    "profile": {
+        "id": "user-uuid",
+        "full_name": "John Doe",
+        "email": "john@example.com",
+        "college_name": "College of Engineering, Trivandrum",
+        "branch": "Computer Science & Engineering",
+        "semester": 3,
+        "study_time_minutes": 42.5,
+        "onboarding_completed": true,
+        "created_at": "2026-03-15T10:30:00Z",
+        "updated_at": "2026-04-05T14:20:00Z"
+    },
+    "stats": {
+        "questions": 47,
+        "studyTime": 43,
+        "favSubject": "Object Oriented Programming"
+    }
+}
+```
+
+**The question count query explained:**
+```sql
+-- Supabase SDK translates this to:
+SELECT count(*) FROM messages 
+  INNER JOIN conversations ON messages.conversation_id = conversations.id
+WHERE messages.role = 'user'
+  AND conversations.user_id = 'user-uuid';
+```
+This counts only user messages (not AI responses) in the user's own conversations.
+
+**Connected to:**
+- `app/(dashboard)/profile/page.tsx` → fetches this on mount to populate the profile form
+- `supabase/schema.sql` → `user_profiles`, `messages`, `conversations`, `user_progress` tables
+
+---
+
+### PUT — Update Profile
+
+```typescript
+export async function PUT(request: Request) {
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+
+    if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+    // Rate limit: 10 req / 60s (stricter for writes)
+    const rateResult = await checkRateLimit(`profile:${user.id}`, PROFILE_RATE_LIMIT);
+    if (!rateResult.allowed) { return NextResponse.json({ error: "Too many requests." }, { status: 429 }); }
+
+    const body = await request.json();
+    const { full_name, college_name, branch, semester } = body;
+
+    // ── Input Validation ──
+    if (typeof full_name !== "string" || full_name.trim().length < 2 || full_name.length > 100) {
+        return NextResponse.json({ error: "Name must be 2-100 characters" }, { status: 400 });
+    }
+    if (typeof college_name !== "string" || college_name.length > 200) {
+        return NextResponse.json({ error: "Invalid college name" }, { status: 400 });
+    }
+    if (typeof branch !== "string" || branch.length > 50) {
+        return NextResponse.json({ error: "Invalid department" }, { status: 400 });
+    }
+    const semesterNum = Number(semester);
+    if (!Number.isInteger(semesterNum) || semesterNum < 1 || semesterNum > 8) {
+        return NextResponse.json({ error: "Semester must be 1-8" }, { status: 400 });
+    }
+
+    // ── Update user_profiles table ──
+    await supabase.from("user_profiles").upsert({
+        id: user.id,
+        full_name: full_name.trim(),
+        email: user.email || "",
+        college_name: college_name.trim(),
+        branch: branch.trim(),
+        semester: semesterNum,
+        onboarding_completed: true,
+    });
+
+    // ── Also update auth.users.user_metadata ──
+    const serviceClient = await createServiceClient();
+    await serviceClient.auth.admin.updateUserById(user.id, {
+        user_metadata: {
+            ...user.user_metadata,
+            full_name: full_name.trim(),
+        },
+    });
+
+    return NextResponse.json({ success: true, profile: { ... } });
+}
+```
+
+**Why two database writes?**
+
+1. **`user_profiles` table update** — The main profile data store (RLS: user can only update their own row)
+2. **`auth.users.user_metadata` update** — This updates Supabase Auth's internal user record so that `supabase.auth.getUser()` returns the updated name. This uses the **service role client** because only admin operations can update auth user metadata.
+
+**Input validation table:**
+
+| Field | Type Check | Length Limit | Range Check |
+|-------|-----------|--------------|-------------|
+| `full_name` | `typeof === "string"` | 2-100 chars | — |
+| `college_name` | `typeof === "string"` | max 200 chars | — |
+| `branch` | `typeof === "string"` | max 50 chars | — |
+| `semester` | `Number.isInteger()` | — | 1-8 |
+
+**Connected to:**
+- `app/(dashboard)/profile/page.tsx` → calls PUT when user submits profile form
+- `lib/supabase/server.ts` → `createClient()` for profile update, `createServiceClient()` for auth metadata update
+
+---
+
+## 5.3 Courses API — `app/api/courses/route.ts`
+
+```typescript
+// app/api/courses/route.ts
+const COURSES_RATE_LIMIT = { maxRequests: 60, windowSeconds: 60 };
+const DEFAULT_LIMIT = 50;
+const MAX_LIMIT = 100;
+
+export async function GET(request: NextRequest) {
+    const supabase = await createClient();
+
+    // IP-based rate limiting (public route, no auth required)
+    const forwarded = request.headers.get("x-forwarded-for");
+    const ip = forwarded?.split(",")[0]?.trim() ?? "unknown";
+    const rateResult = await checkRateLimit(`courses:${ip}`, COURSES_RATE_LIMIT);
+    if (!rateResult.allowed) { return NextResponse.json({ error: "Too many requests." }, { status: 429 }); }
+
+    const { searchParams } = new URL(request.url);
+    const semester = searchParams.get("semester");
+    const limitParam = Number(searchParams.get("limit") ?? DEFAULT_LIMIT);
+    const offsetParam = Number(searchParams.get("offset") ?? 0);
+
+    // Clamp pagination params
+    const limit = Math.min(Math.max(1, limitParam), MAX_LIMIT);
+    const offset = Math.max(0, offsetParam);
+
+    let query = supabase
+        .from("courses")
+        .select("*", { count: "exact" })
+        .order("semester")
+        .order("course_code")
+        .range(offset, offset + limit - 1);
+
+    // Optional filter by semester
+    if (semester) {
+        const s = Number(semester);
+        if (!Number.isInteger(s) || s < 1 || s > 8) {
+            return NextResponse.json({ error: "Invalid semester. Must be 1-8." }, { status: 400 });
+        }
+        query = query.eq("semester", s);
+    }
+
+    const { data, error, count } = await query;
+
+    return NextResponse.json({
+        courses: data || [],
+        total: count ?? 0,
+        limit,
+        offset,
+    });
+}
+```
+
+**Key details:**
+- **Public route** — No auth required (middleware allows `/api/courses` without session)
+- **IP-based rate limiting** — Uses `x-forwarded-for` header since there's no user ID
+- **Pagination** — `limit` (clamped to 1-100) and `offset` (min 0) query params
+- **Optional semester filter** — `?semester=3` returns only semester 3 courses
+- **Sorted by** semester first, then course code
+
+**Example request & response:**
+
+```
+GET /api/courses?semester=3&limit=10&offset=0
+
+{
+    "courses": [
+        {
+            "id": "uuid",
+            "course_code": "PBCST304",
+            "course_name": "Object Oriented Programming",
+            "semester": 3,
+            "credits": 3,
+            "department": "CSE",
+            "description": "...",
+            "module_count": 4
+        }
+    ],
+    "total": 1,
+    "limit": 10,
+    "offset": 0
+}
+```
+
+**Connected to:**
+- `app/(dashboard)/courses/page.tsx` → fetches and displays the course catalog
+- `supabase/schema.sql` → `courses` table (public SELECT via RLS)
+
+---
+
+## 5.4 Patterns API — `app/api/patterns/route.ts`
+
+```typescript
+// app/api/patterns/route.ts
+export async function GET(request: NextRequest) {
+    // ... same IP-based rate limiting as courses ...
+
+    const { searchParams } = new URL(request.url);
+    const courseId = searchParams.get("courseId");
+    const limit = Math.min(Math.max(1, limitParam), MAX_LIMIT);
+    const offset = Math.max(0, offsetParam);
+
+    let query = supabase
+        .from("question_patterns")
+        .select("*, course:courses(*)", { count: "exact" })
+        .order("total_frequency", { ascending: false })        // Most frequent first
+        .range(offset, offset + limit - 1);
+
+    if (courseId) {
+        // Validate UUID format (full regex)
+        const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+        if (!uuidRegex.test(courseId)) {
+            return NextResponse.json({ error: "Invalid course ID format" }, { status: 400 });
+        }
+        query = query.eq("course_id", courseId);
+    }
+
+    return NextResponse.json({
+        patterns: data || [],
+        total: count ?? 0,
+        limit,
+        offset,
+    });
+}
+```
+
+**Key differences from Courses API:**
+- Queries `question_patterns` table instead of `courses`
+- Joins with `courses` via `course:courses(*)` to include course details
+- Filters by `courseId` (UUID) instead of `semester` (integer)
+- Sorted by `total_frequency` descending (most asked topics first)
+- UUID validation uses the full format regex (`/^[0-9a-f]{8}-...$/i`)
+
+**Connected to:**
+- `app/(dashboard)/patterns/page.tsx` → displays exam question frequency analysis
+- `supabase/schema.sql` → `question_patterns` + `courses` tables
+
+---
+
+## 5.5 Study Time API — `app/api/study-time/route.ts`
+
+```typescript
+// app/api/study-time/route.ts
+export async function POST(request: Request) {
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+
+    if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+    // Rate limit: 30 req / 60s
+    const rateResult = await checkRateLimit(`study-time:${user.id}`, STUDY_TIME_RATE_LIMIT);
+    if (!rateResult.allowed) { return NextResponse.json({ error: "Too many requests." }, { status: 429 }); }
+
+    const body = await request.json();
+    const seconds = Number(body.seconds);
+
+    // Validate: positive number, max 300 seconds (5 minutes) per save
+    if (!Number.isFinite(seconds) || seconds < 1 || seconds > 300) {
+        return NextResponse.json({ error: "Invalid duration" }, { status: 400 });
+    }
+
+    const minutesToAdd = seconds / 60;  // Convert to fractional minutes
+
+    // Atomic increment via PostgreSQL RPC
+    const { error } = await supabase.rpc("increment_study_time", {
+        user_uuid: user.id,
+        minutes_to_add: minutesToAdd,
+    });
+
+    // Fallback: if Supabase SDK RPC fails, try direct PostgREST fetch
+    if (error) {
+        const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+        const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+        const fallbackRes = await fetch(`${supabaseUrl}/rest/v1/rpc/increment_study_time`, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "apikey": supabaseKey,
+                "Authorization": `Bearer ${supabaseKey}`,
+            },
+            body: JSON.stringify({ user_uuid: user.id, minutes_to_add: minutesToAdd }),
+        });
+        if (!fallbackRes.ok) {
+            console.error("[study-time] Fallback RPC failed:", await fallbackRes.text());
+        }
+    }
+
+    return NextResponse.json({ success: true });
+}
+```
+
+**Why max 300 seconds?**
+The `useStudyTimer` hook saves every 60 seconds and on visibility changes. A single save should never exceed ~60-70 seconds of accumulated time. The 300-second cap prevents abuse (e.g., someone sending `{ seconds: 999999 }` to inflate their study time).
+
+**Why `Number.isFinite()`?**
+`Number.isFinite()` rejects `NaN`, `Infinity`, and `-Infinity` — all of which would pass a simple `seconds > 0` check.
+
+**Fallback mechanism:**
+If the Supabase SDK's `.rpc()` call fails (which can happen with serialization issues), the route falls back to a direct HTTP `fetch` to PostgREST's RPC endpoint. This double-try ensures reliable time tracking.
+
+**Connected to:**
+- `hooks/useStudyTimer.ts` → `flush()` sends POST to this endpoint
+- `hooks/useStudyTimer.ts` → `handleBeforeUnload` sends via `navigator.sendBeacon()`
+- `supabase/migrations/add_study_time.sql` → `increment_study_time()` RPC function
+
+---
+
+## 5.6 Search API — `app/api/search/route.ts`
+
+This is a **standalone semantic search** endpoint — separate from the chat. It allows searching the syllabus without generating an AI answer.
+
+```typescript
+// app/api/search/route.ts
+export async function POST(req: NextRequest) {
+    const supabase = await createClient();
+    const { data: { user }, error: authError } = await supabase.auth.getUser();
+
+    if (authError || !user) {
+        return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    // Rate limit: 30 req / 60s
+    const rateResult = await checkRateLimit(`search:${user.id}`, SEARCH_RATE_LIMIT);
+
+    const body = await req.json();
+    const query: string = body.query;
+    const courseId: string | undefined = body.courseId;
+
+    // Validate
+    if (!query || typeof query !== "string" || query.trim().length === 0) {
+        return NextResponse.json({ error: "Query is required." }, { status: 400 });
+    }
+    if (query.length > 1000) {
+        return NextResponse.json({ error: "Query too long." }, { status: 400 });
+    }
+    if (courseId && !/^[0-9a-f-]{36}$/.test(courseId)) {
+        return NextResponse.json({ error: "Invalid courseId." }, { status: 400 });
+    }
+
+    // Call RAG search (embed + pgvector similarity)
+    const matches = await searchSyllabus(query, courseId);
+    const context = formatContext(matches);
+
+    return NextResponse.json({ matches, context });
+}
+```
+
+**Difference from `/api/chat`:**
+- `/api/search` → Only does Step 1 (embed) + Step 2 (search) of the RAG pipeline. Returns raw matches.
+- `/api/chat` → Full pipeline: embed → search → format → prompt → GPT → save to DB.
+
+**Use case:** Useful for a "search syllabus" feature where users want to find content without waiting for an AI response. Can also be used by future features like "related topics" or "study recommendations".
+
+**Connected to:**
+- `lib/rag/search.ts` → `searchSyllabus()` and `formatContext()`
+
+---
+
+## 5.7 Types & Constants — `types/index.ts`
+
+This file contains all TypeScript interfaces and constant data used throughout the application.
+
+```typescript
+// types/index.ts
+
+// ---- Core Data Types ----
+
+export interface Message {
+    id: string;
+    conversation_id: string;
+    role: "user" | "assistant";
+    content: string;
+    sources?: Array<{
+        course_code: string;
+        module: string;
+        topic: string;
+        similarity: number;
+    }>;
+    created_at: string;
+}
+
+export interface Conversation {
+    id: string;
+    user_id: string;
+    title: string;
+    course_id?: string;
+    created_at: string;
+    updated_at: string;
+}
+
+export interface UserProfile {
+    id: string;
+    full_name: string;
+    email: string;
+    avatar_url?: string;
+    college_name: string;
+    graduation_year: number;
+    branch: string;
+    semester: number;
+    referral_source?: string;
+    onboarding_completed: boolean;
+    study_time_minutes: number;
+    created_at: string;
+    updated_at: string;
+}
+
+export interface Course {
+    id: string;
+    course_code: string;
+    course_name: string;
+    semester: number;
+    credits: number;
+    department: string;
+    description?: string;
+    module_count: number;
+    created_at: string;
+}
+
+// ---- Constants ----
+
+export const DEPARTMENTS = [
+    { id: "CSE", name: "Computer Science & Engineering", shortName: "CSE", icon: "⚙️" },
+    { id: "CE", name: "Civil Engineering", shortName: "CE", icon: "🏗️" },
+    { id: "ME", name: "Mechanical Engineering", shortName: "ME", icon: "🔧" },
+    { id: "EEE", name: "Electrical & Electronics Engineering", shortName: "EEE", icon: "⚡" },
+    { id: "ECE", name: "Electronics & Communication Engineering", shortName: "ECE", icon: "📡" },
+];
+
+export const REFERRAL_OPTIONS = [
+    { id: "friend", label: "👥 Friend or Classmate" },
+    { id: "instagram", label: "📱 Instagram" },
+    { id: "whatsapp", label: "💬 WhatsApp / Telegram" },
+    { id: "google", label: "🔍 Google Search" },
+    { id: "facebook", label: "📘 Facebook" },
+    { id: "college", label: "🎓 College Notice / Poster" },
+    { id: "other", label: "📰 Other" },
+];
+
+export const KTU_COLLEGES = [
+    "College of Engineering, Trivandrum (CET)",
+    "Government Engineering College, Thrissur (GECT)",
+    "Government Engineering College, Barton Hill",
+    "TKM College of Engineering, Kollam",
+    "Model Engineering College, Kochi (MEC)",
+    // ... 130+ KTU-affiliated engineering colleges
+    "Other",
+];
+```
+
+**Who uses what:**
+
+| Type / Constant | Used By |
+|-----------------|---------|
+| `Message` | `ChatInterface`, `MessageList`, `Message`, `/api/chat` |
+| `Conversation` | `RecentChats`, `ChatItem` |
+| `UserProfile` | `/api/profile`, `UserProfile` sidebar, profile page |
+| `Course` | `/api/courses`, courses page |
+| `DEPARTMENTS` | `DepartmentCards` (onboarding step 2) |
+| `REFERRAL_OPTIONS` | `ReferralOptions` (onboarding step 4) |
+| `KTU_COLLEGES` | `CollegeSelector` (onboarding step 1) |
+
+---
+
+## 5.8 Utility Functions — `lib/utils.ts`
+
+```typescript
+// lib/utils.ts
+import { clsx, type ClassValue } from "clsx";
+import { twMerge } from "tailwind-merge";
+
+// Merge Tailwind classes intelligently (resolves conflicts like "p-2 p-4" → "p-4")
+export function cn(...inputs: ClassValue[]) {
+    return twMerge(clsx(inputs));
+}
+
+// "John Doe" → "JD", "Alice" → "A"
+export function getInitials(name: string): string {
+    return name.split(" ").map((n) => n[0]).join("").toUpperCase().slice(0, 2);
+}
+
+// "A very long string that goes on..." → "A very long str..."
+export function truncate(str: string, length: number): string {
+    if (str.length <= length) return str;
+    return str.slice(0, length) + "...";
+}
+
+// "2026-04-05T14:20:00Z" → "5 Apr 2026" (Indian English locale)
+export function formatDate(date: string | Date): string {
+    return new Intl.DateTimeFormat("en-IN", {
+        day: "numeric",
+        month: "short",
+        year: "numeric",
+    }).format(new Date(date));
+}
+```
+
+**`cn()` explained in depth:**
+```typescript
+cn("p-4", "p-2")                    // → "p-2" (tailwind-merge resolves conflict)
+cn("text-red-500", false && "hidden") // → "text-red-500" (clsx removes falsy values)
+cn("bg-gray-100", isActive && "bg-indigo-50") // Conditional classes + merge
+```
+
+This is the most-used utility in the codebase — every component with conditional Tailwind classes uses it.
+
+**Connected to:** Used by `NavigationLinks`, `ChatItem`, `Message`, `InputBox`, and every component with conditional styling.
+
+---
+
+*End of Part 5. Part 6 will cover Data Seeding Scripts, the Complete File Connection Map, and the full User Perspective Flow.*
