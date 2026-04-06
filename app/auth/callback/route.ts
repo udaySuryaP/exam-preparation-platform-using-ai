@@ -15,7 +15,10 @@ import { cookies } from "next/headers";
 export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const code = searchParams.get("code");
-    const next = searchParams.get("next") ?? "/chat";
+    const nextParam = searchParams.get("next") ?? "/chat";
+
+    // Prevent open redirect: only allow relative paths
+    const next = nextParam.startsWith("/") && !nextParam.startsWith("//") ? nextParam : "/chat";
 
     if (!code) {
         // No code — something went wrong with the email link

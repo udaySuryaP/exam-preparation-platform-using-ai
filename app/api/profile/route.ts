@@ -1,10 +1,11 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { checkRateLimit } from "@/lib/rate-limit";
 
 const PROFILE_RATE_LIMIT = { maxRequests: 10, windowSeconds: 60 };
+const PROFILE_READ_RATE_LIMIT = { maxRequests: 30, windowSeconds: 60 };
 
-export async function GET() {
+export async function GET(request: NextRequest) {
     try {
         const supabase = await createClient();
         const {
@@ -13,6 +14,14 @@ export async function GET() {
 
         if (!user) {
             return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+        }
+
+        const rateResult = await checkRateLimit(`profile-read:${user.id}`, PROFILE_READ_RATE_LIMIT);
+        if (!rateResult.allowed) {
+            return NextResponse.json(
+                { error: "Too many requests. Please wait a moment." },
+                { status: 429 }
+            );
         }
 
         const { data: profile } = await supabase

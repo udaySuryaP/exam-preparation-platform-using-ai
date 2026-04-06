@@ -69,6 +69,13 @@ export async function POST(req: NextRequest) {
             );
         }
 
+        if (conversationId && !/^[0-9a-f-]{36}$/.test(conversationId)) {
+            return NextResponse.json(
+                { error: "Invalid conversationId." },
+                { status: 400 }
+            );
+        }
+
         let activeConversationId = conversationId;
 
         if (activeConversationId) {
@@ -147,18 +154,12 @@ export async function POST(req: NextRequest) {
             conversationId: activeConversationId,
         });
     } catch (err: unknown) {
-        const errMessage =
-            err instanceof Error ? err.message : "Unknown error";
-        const errStack = err instanceof Error ? err.stack : "";
-        const errCause = err instanceof Error && err.cause ? String((err.cause as Error).message || err.cause) : "none";
-        console.error("[/api/chat] ERROR:", errMessage, "CAUSE:", errCause);
-        // Write error to file for debugging
-        try {
-            const fs = await import("fs");
-            fs.writeFileSync("chat-error.log", `${new Date().toISOString()}\nERROR: ${errMessage}\nCAUSE: ${errCause}\nSTACK: ${errStack}\n`, "utf-8");
-        } catch { /* ignore fs errors */ }
+        console.error(
+            "[/api/chat] ERROR:",
+            err instanceof Error ? err.message : "Unknown error"
+        );
         return NextResponse.json(
-            { error: errMessage },
+            { error: "Something went wrong. Please try again." },
             { status: 500 }
         );
     }

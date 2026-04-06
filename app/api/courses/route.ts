@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { checkRateLimit } from "@/lib/rate-limit";
+
+const COURSES_RATE_LIMIT = { maxRequests: 60, windowSeconds: 60 };
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
@@ -7,6 +10,18 @@ const MAX_LIMIT = 100;
 export async function GET(request: NextRequest) {
     try {
         const supabase = await createClient();
+
+        // IP-based rate limiting for public route
+        const forwarded = request.headers.get("x-forwarded-for");
+        const ip = forwarded?.split(",")[0]?.trim() ?? "unknown";
+        const rateResult = await checkRateLimit(`courses:${ip}`, COURSES_RATE_LIMIT);
+        if (!rateResult.allowed) {
+            return NextResponse.json(
+                { error: "Too many requests. Please wait a moment." },
+                { status: 429 }
+            );
+        }
+
         const { searchParams } = new URL(request.url);
         const semester = searchParams.get("semester");
         const limitParam = Number(searchParams.get("limit") ?? DEFAULT_LIMIT);

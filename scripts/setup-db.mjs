@@ -1,10 +1,15 @@
 // Database setup script for the new Supabase project
-// Run with: node scripts/setup-db.mjs
+// Run with: node --env-file=.env.local scripts/setup-db.mjs
 
 import { createClient } from '@supabase/supabase-js';
 
-const SUPABASE_URL = 'https://bhmfejawrxlckajrspbp.supabase.co';
-const SERVICE_ROLE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJobWZlamF3cnhsY2thanJzcGJwIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjI3ODkzNywiZXhwIjoyMDg3ODU0OTM3fQ.YISHm2056bfarouxEGGsNSFhwPEpi8mZzYMORHAKAJw';
+const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+if (!SUPABASE_URL || !SERVICE_ROLE_KEY) {
+    console.error('❌ Missing environment variables. Ensure NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are set in .env.local');
+    process.exit(1);
+}
 
 const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
 
@@ -241,7 +246,6 @@ async function testConnection() {
 const connected = await testConnection();
 if (!connected) {
     console.log('\n⚠️ Cannot reach Supabase. DNS may not have propagated yet.');
-    console.log('Please run the schema.sql manually in the Supabase SQL Editor:');
-    console.log('https://supabase.com/dashboard/project/bhmfejawrxlckajrspbp/sql/new');
+    console.log('Please run the schema.sql manually in the Supabase SQL Editor.');
     process.exit(1);
 }
