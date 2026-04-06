@@ -5138,7 +5138,574 @@ This document covered the **entire KTU Exam Prep AI platform** in 6 parts:
 **Total files documented**: 60+  
 **Total database tables**: 8  
 **Total API routes**: 7  
-**Total React components**: 20+  
+**Total React components**: 25+  
+
+---
+
+# Addendum: Previously Uncovered Files
+
+The following files were discovered during a post-completion audit and are documented here for completeness.
+
+---
+
+## A.1 Landing Page — `app/page.tsx`
+
+This is the **public marketing page** visitors see before signing up. It is a **325-line** server-rendered page with no client-side JavaScript.
+
+```typescript
+// app/page.tsx — Server Component (no "use client")
+import Link from "next/link";
+import {
+    GraduationCap, Brain, BarChart3, BookOpen, ArrowRight,
+    Sparkles, Target, TrendingUp, CheckCircle,
+} from "lucide-react";
+
+export default function LandingPage() {
+    return (
+        <div className="min-h-screen bg-white">
+            {/* Fixed Navigation Bar */}
+            <nav className="fixed top-0 left-0 right-0 z-50 bg-white/80 backdrop-blur-md border-b">
+                <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                    {/* Logo | Features | How It Works | Sign In | [Get Started Free →] */}
+                </div>
+            </nav>
+
+            {/* Hero Section */}
+            <section className="relative pt-32 pb-20 overflow-hidden">
+                {/* Gradient blobs for visual depth */}
+                <div className="absolute top-20 left-10 w-72 h-72 bg-indigo-200/30 rounded-full blur-3xl" />
+                <div className="absolute bottom-10 right-10 w-96 h-96 bg-blue-200/30 rounded-full blur-3xl" />
+
+                {/* Badge: "Powered by GPT-4 Turbo & KTU 2024 Syllabus" */}
+                <h1>Ace Your <span className="bg-gradient-to-r ...">KTU Exams</span> with AI</h1>
+                {/* CTA: [Get Started Free →] [Learn More] */}
+                {/* Trust badges: ✓ Free to start | ✓ 2024 Syllabus | ✓ All Departments */}
+            </section>
+
+            {/* Features Section (#features) — 3 cards */}
+            {/* Card 1: Brain icon → "AI-Powered Answers" */}
+            {/* Card 2: BarChart3 icon → "Exam Patterns" */}
+            {/* Card 3: BookOpen icon → "Smart Study" */}
+
+            {/* How It Works Section (#how-it-works) — 3 steps */}
+            {/* Step 1: Target → "Select Your Course" */}
+            {/* Step 2: Brain → "Ask Questions" */}
+            {/* Step 3: TrendingUp → "Track & Improve" */}
+
+            {/* CTA Banner — Indigo gradient with SVG pattern */}
+            {/* "Start Learning Now" + [Get Started Free →] */}
+
+            {/* Footer — 4-column layout */}
+            {/* Logo + description | Product links | Support links | © copyright */}
+        </div>
+    );
+}
+```
+
+**Key design decisions:**
+- **Server Component** — No "use client" needed, so it renders instantly with zero JavaScript bundle
+- **Backdrop blur nav** — `bg-white/80 backdrop-blur-md` creates frosted glass navigation
+- **Animated gradient blobs** — Large blurred circles create subtle depth
+- **Hover microinteractions** — Cards lift on hover with `hover:-translate-y-1` and `hover:scale-[1.02]`
+- **Responsive** — Mobile gets simplified nav (just "Get Started" button), desktop gets full navigation
+
+**Connected to:**
+- `app/(auth)/login/page.tsx` → "Sign In" link
+- `app/(auth)/signup/page.tsx` → "Get Started Free" CTA button
+- `middleware.ts` → "/" is in the public paths list, so it loads without auth
+
+---
+
+## A.2 Verify Email Page — `app/(auth)/verify-email/page.tsx`
+
+After signup, users are sent to this page to wait for email verification.
+
+```typescript
+"use client";
+
+export default function VerifyEmailPage() {
+    const searchParams = useSearchParams();
+    const email = searchParams.get("email");  // Passed by SignupForm
+    const supabase = createClient();
+
+    const [checking, setChecking] = useState(true);
+    const [resending, setResending] = useState(false);
+    const [message, setMessage] = useState("");
+
+    // Check if user already has a confirmed session
+    useEffect(() => {
+        const checkSession = async () => {
+            const { data } = await supabase.auth.getSession();
+            if (data.session?.user?.email_confirmed_at) {
+                window.location.href = "/onboarding/step-1";  // Already verified
+            }
+            setChecking(false);
+        };
+        checkSession();
+    }, [supabase]);
+
+    const resendEmail = async () => {
+        setResending(true);
+        const { error } = await supabase.auth.resend({
+            type: "signup",
+            email,
+            options: { emailRedirectTo: `${window.location.origin}/auth/callback` },
+        });
+
+        if (error) {
+            if (error.message.toLowerCase().includes("rate limit")) {
+                setMessage("Too many attempts. Please wait a few minutes.");
+            } else {
+                setMessage("Failed to resend. Please try again.");
+            }
+        } else {
+            setMessage("✓ Verification email resent. Check inbox and spam.");
+        }
+        setResending(false);
+    };
+
+    // UI: MailCheck icon + "Check your email" + email display + [Resend] button
+}
+```
+
+**Connected to:**
+- `components/auth/SignupForm.tsx` → redirects here after `signUp()` with `?email=...`
+- `app/auth/callback/route.ts` → the verification link in the email points to callback
+- `lib/supabase/client.ts` → browser-side Supabase client for resend
+
+---
+
+## A.3 OTPInput Component — `components/auth/OTPInput.tsx`
+
+A 6-digit OTP input component with advanced UX features (currently available but may not be actively used — the app uses email link verification by default).
+
+```typescript
+"use client";
+
+export function OTPInput() {
+    const [otp, setOtp] = useState<string[]>(Array(6).fill(""));
+    const [isVerifying, setIsVerifying] = useState(false);
+    const [countdown, setCountdown] = useState(30);
+    const [canResend, setCanResend] = useState(false);
+    const [attempts, setAttempts] = useState(0);
+    const MAX_ATTEMPTS = 5;
+    const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
+
+    // Auto-focus first input on mount
+    useEffect(() => { inputRefs.current[0]?.focus(); }, []);
+
+    // Countdown timer for resend button
+    useEffect(() => {
+        if (countdown > 0 && !canResend) {
+            const timer = setTimeout(() => setCountdown(countdown - 1), 1000);
+            return () => clearTimeout(timer);
+        } else if (countdown === 0) { setCanResend(true); }
+    }, [countdown, canResend]);
+
+    const verifyOTP = async (code: string) => {
+        if (attempts >= MAX_ATTEMPTS) { setError("Too many attempts."); return; }
+        const { error } = await supabase.auth.verifyOtp({ email, token: code, type: "signup" });
+        if (error) { setAttempts(prev => prev + 1); /* show remaining attempts */ }
+        else { setSuccess(true); router.push("/step-1"); }
+    };
+
+    const handleChange = (index: number, value: string) => {
+        if (!/^\d*$/.test(value)) return;        // Only digits
+        newOtp[index] = value.slice(-1);          // Single char
+        if (value && index < 5) inputRefs.current[index + 1]?.focus();  // Auto-advance
+        if (code.length === 6) verifyOTP(code);   // Auto-submit when complete
+    };
+
+    const handleKeyDown = (index: number, e: KeyboardEvent) => {
+        if (e.key === "Backspace" && !otp[index] && index > 0)
+            inputRefs.current[index - 1]?.focus();  // Backspace goes to previous
+    };
+
+    const handlePaste = (e: ClipboardEvent) => {
+        const pasted = e.clipboardData.getData("text").replace(/\D/g, "").slice(0, 6);
+        // Fill all 6 inputs from pasted text, auto-submit if complete
+    };
+
+    // UI: 6 individual input boxes + Verify button + Resend countdown
+}
+```
+
+**Key UX features:**
+- **Auto-focus** first input on mount
+- **Auto-advance** to next input after typing
+- **Auto-submit** when all 6 digits entered
+- **Backspace navigation** — pressing backspace on empty input goes back
+- **Paste support** — pasting "123456" fills all 6 boxes
+- **Rate limiting** — max 5 attempts, 30s resend cooldown
+- **Digits only** — regex filter rejects non-numeric input
+
+---
+
+## A.4 ProgressIndicator — `components/onboarding/ProgressIndicator.tsx`
+
+Visual step indicator used in the onboarding layout.
+
+```typescript
+"use client";
+
+interface ProgressIndicatorProps {
+    currentStep: number;
+    totalSteps?: number;
+}
+
+export function ProgressIndicator({ currentStep, totalSteps = 4 }: ProgressIndicatorProps) {
+    return (
+        <div className="flex items-center justify-center gap-3 mb-8">
+            {Array.from({ length: totalSteps }, (_, i) => (
+                <div key={i} className="flex items-center gap-3">
+                    <div className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold
+                        ${i + 1 < currentStep
+                            ? "bg-indigo-600 text-white"           // ✓ Completed
+                            : i + 1 === currentStep
+                                ? "bg-indigo-600 text-white ring-4 ring-indigo-100"  // ● Active
+                                : "bg-gray-100 text-gray-400"     // ○ Upcoming
+                        }`}
+                    >
+                        {i + 1 < currentStep ? "✓" : i + 1}
+                    </div>
+                    {/* Connector line between steps */}
+                    {i < totalSteps - 1 && (
+                        <div className={`w-8 h-0.5 ${i + 1 < currentStep ? "bg-indigo-600" : "bg-gray-200"}`} />
+                    )}
+                </div>
+            ))}
+        </div>
+    );
+}
+```
+
+**Visual representation at step 3:**
+```
+ [✓]──[✓]──[●]──[○]
+  1     2    3    4
+```
+
+**Connected to:** `app/onboarding/layout.tsx` → renders ProgressIndicator with the current step number derived from `usePathname()`
+
+---
+
+## A.5 Global Stylesheet — `app/globals.css`
+
+The design system for the entire application — 339 lines defining theme tokens, utility classes, and animations.
+
+```css
+/* app/globals.css */
+@import "tailwindcss";
+
+@theme inline {
+    /* === SIDEBAR (DARK THEME) === */
+    --color-sidebar-bg: #0f172a;
+    --color-sidebar-surface: #1e293b;
+    --color-sidebar-hover: #334155;
+    --color-sidebar-text-primary: #f8fafc;
+    --color-sidebar-text-secondary: #94a3b8;
+
+    /* === MAIN CONTENT (LIGHT THEME) === */
+    --color-background: #ffffff;
+    --color-surface: #f9fafb;
+    --color-foreground: #111827;
+    --color-muted: #6b7280;
+    --color-border: #e5e7eb;
+
+    /* === ACCENT COLORS === */
+    --color-primary: #3b82f6;
+    --color-primary-hover: #2563eb;
+    --color-success: #10b981;
+    --color-destructive: #ef4444;
+
+    /* === MESSAGES === */
+    --color-message-user-bg: #eff6ff;
+    --color-message-ai-bg: #f7f8fa;
+
+    /* === TYPOGRAPHY === */
+    --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    --font-mono: 'Fira Code', Monaco, Consolas, monospace;
+
+    /* === DESIGN TOKENS === */
+    --radius-sm: 4px;  --radius-md: 8px;  --radius-lg: 12px;  --radius-xl: 16px;
+    --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
+    --shadow-focus: 0 0 0 3px rgba(59,130,246,0.15);
+    --transition-fast: 150ms cubic-bezier(0.4,0,0.2,1);
+    --transition-base: 200ms cubic-bezier(0.4,0,0.2,1);
+}
+
+/* === UTILITY CLASSES === */
+.text-display    { font-size: 32px; font-weight: 700; letter-spacing: -0.02em; }
+.text-heading-1  { font-size: 28px; font-weight: 600; }
+.text-heading-2  { font-size: 20px; font-weight: 600; }
+.text-body       { font-size: 15px; line-height: 1.6; }
+.text-caption    { font-size: 12px; color: var(--color-muted); }
+
+/* === CHAT UI === */
+.chat-message    { padding: 16px 24px; display: flex; gap: 12px; }
+.chat-avatar     { width: 32px; height: 32px; border-radius: 9999px;
+                   background: linear-gradient(135deg, #3b82f6, #8b5cf6); }
+.chat-bubble-user { background: var(--color-message-user-bg); border-radius: 12px; }
+.chat-bubble-ai   { background: var(--color-message-ai-bg); border-radius: 12px; }
+.chat-input      { min-height: 52px; border-radius: 12px; font-size: 15px; }
+
+/* === BUTTONS === */
+.btn-primary     { height: 44px; background: var(--color-primary); color: white; }
+.btn-primary:hover { background: var(--color-primary-hover); transform: translateY(-1px); }
+.btn-secondary   { height: 44px; border: 1px solid var(--color-border); }
+
+/* === ANIMATIONS === */
+@keyframes slideUpFade { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; } }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
+
+.animate-slide-up      { animation: slideUpFade 200ms ease-out; }
+.animate-slide-up-fade { animation: slideUpFade 400ms ease-out; }
+.animate-fade-in       { animation: fadeIn 300ms ease-out; }
+.skeleton              { background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 37%, #f0f0f0 63%);
+                         background-size: 200% 100%; animation: shimmer 1.5s infinite; }
+
+/* === SCROLLBAR === */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 999px; }
+.scrollbar-thin::-webkit-scrollbar { width: 4px; }
+```
+
+**Architecture note:** This uses **Tailwind CSS v4's `@theme inline`** syntax to define CSS custom properties as Tailwind tokens. This means `bg-sidebar-bg` automatically maps to `--color-sidebar-bg` in Tailwind classes.
+
+**Connected to:** Every component in the application — this is the foundational design system.
+
+---
+
+## A.6 Error & Loading Boundaries
+
+The app has 7 error/loading boundary files implementing Next.js's error handling conventions:
+
+### Root Error Boundary — `app/error.tsx`
+
+```typescript
+"use client";
+export default function Error({ error, reset }: { error: Error; reset: () => void }) {
+    return (
+        <div className="min-h-screen flex items-center justify-center">
+            <div className="text-center animate-fade-in">
+                <div className="w-16 h-16 bg-red-100 rounded-full ...">⚠️</div>
+                <h2>Something went wrong</h2>
+                <p>{error.message || "An unexpected error occurred."}</p>
+                <button onClick={reset}>
+                    <RefreshCw /> Try Again
+                </button>
+            </div>
+        </div>
+    );
+}
+```
+
+### 404 Page — `app/not-found.tsx`
+
+```typescript
+// Server Component
+export default function NotFound() {
+    return (
+        <div className="min-h-screen flex items-center justify-center">
+            <GraduationCap />
+            <h1>404</h1>
+            <h2>Page Not Found</h2>
+            <Link href="/"><Home /> Go Home</Link>
+        </div>
+    );
+}
+```
+
+### Loading States
+
+| File | Renders |
+|------|---------|
+| `app/loading.tsx` | Centered spinner for root pages |
+| `app/(auth)/loading.tsx` | Centered spinner for auth pages |
+| `app/(dashboard)/loading.tsx` | Centered spinner with "Loading..." text |
+| `app/onboarding/loading.tsx` | Centered spinner for onboarding steps |
+
+### Dashboard Error Boundary — `app/(dashboard)/error.tsx`
+
+Same pattern as root error but renders within the dashboard layout (sidebar stays visible).
+
+---
+
+## A.7 Dashboard Pages
+
+### Profile Page — `app/(dashboard)/profile/page.tsx` (306 lines)
+
+```typescript
+"use client";
+
+export default function ProfilePage() {
+    const [profile, setProfile] = useState({ full_name: "", email: "", college_name: "", branch: "", semester: 1 });
+    const [stats, setStats] = useState({ questions: 0, studyTime: 0 });
+    const liveSessionSeconds = useLiveSessionSeconds();  // From useStudyTimer hook
+
+    // Compute live total: saved DB minutes + unsaved session seconds
+    const totalSeconds = useMemo(
+        () => Math.round(stats.studyTime * 60) + liveSessionSeconds,
+        [stats.studyTime, liveSessionSeconds]
+    );
+    const displayHours   = String(Math.floor(totalSeconds / 3600)).padStart(2, '0');
+    const displayMinutes = String(Math.floor((totalSeconds % 3600) / 60)).padStart(2, '0');
+    const displaySeconds = String(totalSeconds % 60).padStart(2, '0');
+
+    useEffect(() => {
+        // 1. Fetch profile + stats from GET /api/profile
+        // 2. Listen for "study-time-saved" custom event to refresh stats
+    }, []);
+
+    const handleSave = async () => {
+        // Client-side validation → PUT /api/profile → show success/error toast
+    };
+
+    return (
+        <div className="flex-1 overflow-y-auto p-6 lg:p-8">
+            <div className="max-w-2xl mx-auto">
+                {/* Header: "Profile — Manage your account" */}
+                {/* Avatar: initials circle + name + email */}
+                {/* Save Toast: green/red notification */}
+
+                {/* Profile Form Card */}
+                {/* - Full Name input (editable) */}
+                {/* - Email input (disabled, cannot change) */}
+                {/* - CollegeSelector (reused from onboarding) */}
+                {/* - Department dropdown (from DEPARTMENTS constant) */}
+                {/* - Semester dropdown (1-8) */}
+                {/* - [Save Changes] button */}
+
+                {/* Usage Statistics Card */}
+                {/* - Questions Asked: {stats.questions} */}
+                {/* - Study Time: HH:MM:SS (live ticking!) */}
+            </div>
+        </div>
+    );
+}
+```
+
+**Key feature — Live Study Timer:** The profile page shows a **real-time ticking** study timer by combining:
+- `stats.studyTime` — saved minutes from the database (refreshed on `"study-time-saved"` event)
+- `liveSessionSeconds` — unsaved seconds from the current session (from `useLiveSessionSeconds()`)
+
+This means the timer on the profile page ticks every second even between API saves.
+
+**Connected to:** `GET /api/profile`, `PUT /api/profile`, `hooks/useStudyTimer.ts`, `components/onboarding/CollegeSelector.tsx` (reused), `types/index.ts` → `DEPARTMENTS`
+
+---
+
+### Courses Page — `app/(dashboard)/courses/page.tsx` (129 lines)
+
+```typescript
+"use client";
+
+export default function CoursesPage() {
+    const [courses, setCourses] = useState<Course[]>([]);
+    const [search, setSearch] = useState("");
+    const [semesterFilter, setSemesterFilter] = useState("all");
+
+    useEffect(() => {
+        // Direct Supabase query (not API route):
+        // supabase.from("courses").select("*").order("semester").order("course_code")
+        // Optional: .eq("semester", filter)
+    }, [semesterFilter]);
+
+    const filtered = courses.filter(c =>
+        c.course_name.toLowerCase().includes(search.toLowerCase()) ||
+        c.course_code.toLowerCase().includes(search.toLowerCase())
+    );
+
+    return (
+        // Header: "Courses — Browse your KTU semester courses"
+        // Filters: Search input + Semester dropdown (1-8)
+        // Grid: 3-column responsive card layout
+        //   Each card: course_code badge | semester | course_name | credits | module_count
+        // Empty state: BookOpen icon + "No courses found"
+        // Loading: 6 skeleton cards
+    );
+}
+```
+
+**Note:** This page queries Supabase **directly** via the client SDK (not through `/api/courses`), so it benefits from RLS and uses the browser session.
+
+---
+
+### Patterns Page — `app/(dashboard)/patterns/page.tsx` (179 lines)
+
+```typescript
+"use client";
+
+export default function PatternsPage() {
+    const [patterns, setPatterns] = useState<QuestionPattern[]>([]);
+    const [courses, setCourses] = useState<Course[]>([]);
+    const [selectedCourse, setSelectedCourse] = useState("all");
+    const [sortBy, setSortBy] = useState<"frequency" | "priority">("frequency");
+
+    useEffect(() => {
+        // Direct Supabase queries:
+        // 1. Fetch all courses for filter dropdown
+        // 2. Fetch question_patterns with course join, optional course filter
+    }, [selectedCourse]);
+
+    const sorted = [...patterns].sort((a, b) => {
+        if (sortBy === "frequency") return b.total_frequency - a.total_frequency;
+        const priorityOrder = { HIGH: 3, MEDIUM: 2, LOW: 1 };
+        return priorityOrder[b.priority] - priorityOrder[a.priority];
+    });
+
+    const getPriorityBadge = (priority: string) => ({
+        HIGH:   "bg-red-50 text-red-700 border-red-200",
+        MEDIUM: "bg-yellow-50 text-yellow-700 border-yellow-200",
+        LOW:    "bg-green-50 text-green-700 border-green-200",
+    }[priority]);
+
+    return (
+        // Header: "Exam Patterns — Analyze question frequency"
+        // Filters: Course dropdown + Sort toggle (Frequency ↔ Priority)
+        // Table: responsive 12-column grid
+        //   Header: Topic | Part A | Part B | Part C | Priority
+        //   Row: topic name + course code | frequency counts | priority badge (color-coded)
+        // Empty state: TrendingUp icon + "No patterns found"
+        // Loading: 5 skeleton rows
+    );
+}
+```
+
+**Key features:**
+- **Dual sort** — Toggle between "most frequent" and "highest priority"
+- **Color-coded badges** — HIGH (red), MEDIUM (yellow), LOW (green)
+- **Responsive table** — Desktop shows 12-column grid, mobile shows stacked cards with labels
+
+**Connected to:** `lib/supabase/client.ts`, `types/index.ts` → `QuestionPattern`, `Course`, `lib/utils.ts` → `cn()`
+
+---
+
+## A.8 Additional Project Files
+
+| File | Type | Purpose |
+|------|------|---------|
+| `course_syllabus/OOPS Module 1-4.docx` | Reference docs | Original KTU syllabus documents used to create seed data |
+| `scripts/get-course-id.ts` | Dev tool | Fetches course UUID from Supabase |
+| `scripts/setup-db.mjs` | Dev tool | Database setup/migration script |
+| `scripts/test-chat-api.ts` | Dev tool | Tests the chat API endpoint |
+| `scripts/threshold-test-r.ts` | Dev tool | Similarity threshold testing |
+| `scripts/*.txt` | Debug output | Various debug/test output files |
+| `supabase/migrations/add_study_time.sql` | Migration | Adds `increment_study_time()` RPC function |
+| `PROJECT_DOCS.txt` | Legacy | Original project documentation (pre-development) |
+| `docs/DATA_MODEL.md` | Planning doc | Database schema design document |
+| `docs/FEATURES.md` | Planning doc | Feature specifications |
+| `docs/MILESTONES.md` | Planning doc | Development milestones |
+| `docs/PROJECT_OVERVIEW.md` | Planning doc | High-level project description |
+| `docs/TECH_STACK.md` | Planning doc | Technology stack decisions |
+| `docs/USER_FLOW.md` | Planning doc | User flow design document |
+| `docs/progress.md` | Audit doc | Development progress tracking |
+| `docs/issues.md` | Audit doc | Known issues and security findings |
+
+---
+
+*Addendum complete. All project files are now documented.*
 
 ---
 
