@@ -998,4 +998,2813 @@ export async function checkRateLimit(key: string, config: RateLimitConfig): Prom
 
 ---
 
-*End of Part 1. Part 2 will cover the Authentication System and Onboarding Flow.*
+*End of Part 1.*
+
+---
+
+# Part 2: Authentication & Onboarding
+
+## 2.1 Authentication System Overview
+
+The authentication system uses **Supabase Auth** with email/password credentials. The flow spans across multiple files:
+
+```
+User visits /signup or /login
+        │
+        ▼
+┌───────────────────────────┐
+│  app/(auth)/layout.tsx     │  ← Centered card layout with logo
+│  app/(auth)/signup/page.tsx│  ← Renders <SignupForm />
+│  app/(auth)/login/page.tsx │  ← Renders <LoginForm />
+└──────────┬────────────────┘
+           │  Supabase SDK calls
+           ▼
+┌───────────────────────────┐
+│  lib/supabase/client.ts    │  ← createBrowserClient()
+│  Supabase Auth API         │  ← signUp() or signInWithPassword()
+└──────────┬────────────────┘
+           │  On success
+           ▼
+┌───────────────────────────┐
+│  If signup → /onboarding/step-1
+│  If login → /chat (middleware checks onboarding)
+└──────────┬────────────────┘
+           │  If email verification enabled
+           ▼
+┌───────────────────────────┐
+│  User clicks email link    │
+│  → /auth/callback?code=XXX │
+│  → app/auth/callback/route.ts exchanges code for session
+│  → Redirects to /onboarding or /chat
+└───────────────────────────┘
+```
+
+---
+
+### 2.1.1 Auth Layout — `app/(auth)/layout.tsx`
+
+The `(auth)` folder is a Next.js **route group** — the parentheses mean it doesn't create a URL segment. So `/login` is the URL, not `/auth/login`.
+
+```typescript
+// app/(auth)/layout.tsx
+import { GraduationCap } from "lucide-react";
+
+export default function AuthLayout({ children }: { children: React.ReactNode }) {
+    return (
+        <div className="min-h-screen bg-gradient-to-br from-indigo-50 via-white to-blue-50 
+                        flex items-center justify-center p-4">
+            <div className="absolute top-6 left-6">
+                <a href="/" className="flex items-center gap-2">
+                    <div className="w-9 h-9 bg-indigo-600 rounded-lg flex items-center justify-center">
+                        <GraduationCap className="w-5 h-5 text-white" />
+                    </div>
+                    <span className="text-lg font-bold text-gray-900">KTU Exam Prep AI</span>
+                </a>
+            </div>
+            {children}
+        </div>
+    );
+}
+```
+
+**What it does:**
+- Sets a full-screen gradient background (`from-indigo-50 via-white to-blue-50`)
+- Centers the child content (login/signup form) both vertically and horizontally
+- Places the app logo in the top-left corner linking back to the landing page
+- This layout is **shared** by `/login`, `/signup`, and `/verify-email`
+
+**Connected to:**
+- `app/(auth)/login/page.tsx` → renders `<LoginForm />`
+- `app/(auth)/signup/page.tsx` → renders `<SignupForm />`
+- `app/(auth)/verify-email/page.tsx` → email verification message
+- `app/(auth)/loading.tsx` → loading spinner while pages load
+
+---
+
+### 2.1.2 Auth Loading State — `app/(auth)/loading.tsx`
+
+```typescript
+// app/(auth)/loading.tsx
+"use client";
+
+import { Loader2 } from "lucide-react";
+
+export default function AuthLoading() {
+    return (
+        <div className="min-h-screen flex items-center justify-center 
+                        bg-gradient-to-br from-indigo-50 via-white to-blue-50">
+            <div className="flex flex-col items-center gap-4 animate-fade-in">
+                <div className="w-10 h-10 border-4 border-indigo-200 border-t-indigo-600 
+                               rounded-full animate-spin" />
+                <p className="text-sm text-gray-500">Loading...</p>
+            </div>
+        </div>
+    );
+}
+```
+
+**What it does:** Next.js automatically shows this component while the login or signup page is loading (code splitting / lazy loading).
+
+---
+
+### 2.1.3 Login Form — `components/auth/LoginForm.tsx`
+
+This is a **client component** (`"use client"`) that handles email/password login with form validation.
+
+```typescript
+// components/auth/LoginForm.tsx
+"use client";
+
+import { useState } from "react";
+import { useRouter } from "next/navigation";
+import Link from "next/link";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { z } from "zod";
+import { Eye, EyeOff, LogIn, Loader2 } from "lucide-react";
+import { createClient } from "@/lib/supabase/client";
+
+// ---- Validation Schema ----
+const loginSchema = z.object({
+    email: z.string().email("Please enter a valid email address"),
+    password: z.string().min(1, "Password is required"),
+});
+
+type LoginFormData = z.infer<typeof loginSchema>;
+
+export function LoginForm() {
+    const router = useRouter();
+    const [showPassword, setShowPassword] = useState(false);
+    const [error, setError] = useState("");
+
+    const {
+        register, handleSubmit,
+        formState: { errors, isSubmitting },
+    } = useForm<LoginFormData>({
+        resolver: zodResolver(loginSchema),
+    });
+
+    const onSubmit = async (data: LoginFormData) => {
+        setError("");
+        const supabase = createClient();
+
+        try {
+            const { error: signInError } = await supabase.auth.signInWithPassword({
+                email: data.email,
+                password: data.password,
+            });
+
+            if (signInError) {
+                // Categorize errors for user-friendly messages
+                if (signInError.message.toLowerCase().includes("fetch") ||
+                    signInError.message.toLowerCase().includes("network")) {
+                    setError("Unable to connect to the server. Please check your internet connection.");
+                } else {
+                    setError("Invalid email or password. Please try again.");
+                }
+                return;
+            }
+
+            router.push("/chat");
+            router.refresh();
+        } catch {
+            setError("Unable to connect to the server. Please check your internet connection.");
+        }
+    };
+
+    // ... renders form with email input, password input (toggle visibility), submit button
+    // ... includes link to /signup at the bottom
+}
+```
+
+**Step-by-step flow:**
+
+1. User fills in email and password
+2. **Zod validation** runs on submit (`zodResolver(loginSchema)`) — validates email format and non-empty password
+3. If validation fails, inline error messages appear under the inputs (via `errors.email.message` / `errors.password.message`)
+4. If validation passes, `onSubmit` fires:
+   - Creates browser Supabase client via `createClient()` from `lib/supabase/client.ts`
+   - Calls `supabase.auth.signInWithPassword({ email, password })`
+   - Supabase verifies credentials against `auth.users` table
+   - On success: Supabase sets auth cookies automatically → `router.push("/chat")` → `router.refresh()` forces middleware to re-run with new session
+   - On failure: Error message displayed (network errors vs. invalid credentials are handled separately)
+5. **Middleware takes over**: When the browser navigates to `/chat`, middleware intercepts the request, finds the user is now authenticated, checks `onboarding_completed`, and allows or redirects as needed
+
+**Connected to:**
+- `lib/supabase/client.ts` → `createClient()` for Supabase SDK
+- `lib/supabase/middleware.ts` → Rule 2 prevents authenticated users from visiting login page again
+- `app/(auth)/layout.tsx` → visual wrapper
+
+**Dependencies:**
+- `react-hook-form` → form state management
+- `@hookform/resolvers/zod` → connects Zod schemas to React Hook Form
+- `zod` → schema-based validation
+- `lucide-react` → icons (Eye, EyeOff, LogIn, Loader2)
+
+---
+
+### 2.1.4 Signup Form — `components/auth/SignupForm.tsx`
+
+The signup form is more complex than login — it has 4 fields, password strength indicator, and creates an initial `user_profiles` row.
+
+```typescript
+// components/auth/SignupForm.tsx
+"use client";
+
+import { useState, useMemo } from "react";
+import { useRouter } from "next/navigation";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { z } from "zod";
+import { createClient } from "@/lib/supabase/client";
+
+// ---- Validation Schema ----
+const signupSchema = z
+    .object({
+        fullName: z.string().min(2, "Name must be at least 2 characters"),
+        email: z.string().email("Please enter a valid email address"),
+        password: z.string().min(8, "Password must be at least 8 characters"),
+        confirmPassword: z.string(),
+    })
+    .refine((data) => data.password === data.confirmPassword, {
+        message: "Passwords do not match",
+        path: ["confirmPassword"],
+    });
+
+// ---- Password Strength Calculator ----
+function getPasswordStrength(password: string) {
+    let score = 0;
+    if (password.length >= 8) score++;
+    if (password.length >= 12) score++;
+    if (/[a-z]/.test(password) && /[A-Z]/.test(password)) score++;
+    if (/\d/.test(password)) score++;
+    if (/[^a-zA-Z0-9]/.test(password)) score++;
+
+    if (score <= 2) return { label: "Weak", color: "bg-red-500", percent: 33 };
+    if (score <= 3) return { label: "Medium", color: "bg-yellow-500", percent: 66 };
+    return { label: "Strong", color: "bg-green-500", percent: 100 };
+}
+
+export function SignupForm() {
+    // ...
+    const onSubmit = async (data: SignupFormData) => {
+        setError("");
+        const supabase = createClient();
+
+        const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
+            email: data.email,
+            password: data.password,
+            options: {
+                data: { full_name: data.fullName },  // Stored in auth.users.user_metadata
+            },
+        });
+
+        if (signUpError) {
+            // Handle: rate limit, network error, already registered
+            return;
+        }
+
+        // With email confirm disabled, session is immediate
+        if (signUpData.user) {
+            // Create initial user_profiles row
+            await supabase.from("user_profiles").upsert({
+                id: signUpData.user.id,
+                full_name: data.fullName,
+                email: data.email,
+                onboarding_completed: false,  // ← This is KEY — middleware will enforce onboarding
+            });
+
+            router.push("/onboarding/step-1");
+            router.refresh();
+        }
+    };
+}
+```
+
+**Step-by-step flow:**
+
+1. User fills in Full Name, Email, Password, Confirm Password
+2. **Password strength indicator** updates in real-time as user types (via `watch("password")` + `useMemo`)
+   - Scoring: length ≥8 (+1), length ≥12 (+1), mixed case (+1), digit (+1), special char (+1)
+   - Visual: colored progress bar (red, yellow, green) with label
+3. **Zod validation** includes a `.refine()` that checks password === confirmPassword
+4. On submit:
+   - Calls `supabase.auth.signUp()` → Creates entry in Supabase's `auth.users` table
+   - The `full_name` is stored in `user_metadata` on the auth user (used later for display)
+   - After successful signup, creates a `user_profiles` row with `onboarding_completed: false`
+   - Navigates to `/onboarding/step-1`
+5. **Error handling** categorizes errors:
+   - Rate limit → "Too many sign-up attempts"
+   - Network error → "Unable to connect"
+   - Already registered → "Try signing in instead"
+
+**What gets created in the database:**
+
+| Table | Row Created |
+|-------|-------------|
+| `auth.users` | `id` (UUID), `email`, `user_metadata: { full_name }` |
+| `user_profiles` | `id` (same UUID), `full_name`, `email`, `onboarding_completed: false` |
+
+**Connected to:**
+- `lib/supabase/client.ts` → browser Supabase client
+- `supabase/schema.sql` → `user_profiles` table
+- `app/onboarding/step-1/page.tsx` → next destination after signup
+
+---
+
+### 2.1.5 Auth Callback — `app/auth/callback/route.ts`
+
+This is a **server-side API route** (GET handler) that processes Supabase's PKCE authentication flow. When email verification is enabled, Supabase sends the user an email with a link that redirects here.
+
+```typescript
+// app/auth/callback/route.ts
+import { NextRequest, NextResponse } from "next/server";
+import { createServerClient } from "@supabase/ssr";
+import { cookies } from "next/headers";
+
+export async function GET(request: NextRequest) {
+    const { searchParams } = new URL(request.url);
+    const code = searchParams.get("code");
+    const nextParam = searchParams.get("next") ?? "/chat";
+
+    // Prevent open redirect: only allow relative paths
+    const next = nextParam.startsWith("/") && !nextParam.startsWith("//") ? nextParam : "/chat";
+
+    if (!code) {
+        return NextResponse.redirect(new URL("/login?error=missing_code", request.url));
+    }
+
+    // Create Supabase client with cookie access
+    const cookieStore = await cookies();
+    const supabase = createServerClient(/* ... cookie config ... */);
+
+    // Exchange the temporary code for a real session
+    const { error } = await supabase.auth.exchangeCodeForSession(code);
+
+    if (error) {
+        return NextResponse.redirect(
+            new URL(`/login?error=${encodeURIComponent(error.message)}`, request.url)
+        );
+    }
+
+    // Check if user has completed onboarding
+    const { data: { user } } = await supabase.auth.getUser();
+    const { data: profile } = await supabase
+        .from("user_profiles")
+        .select("onboarding_completed")
+        .eq("id", user.id)
+        .single();
+
+    if (!profile?.onboarding_completed) {
+        return NextResponse.redirect(new URL("/onboarding/step-1", request.url));
+    }
+
+    return NextResponse.redirect(new URL(next, request.url));
+}
+```
+
+**Step-by-step flow:**
+
+1. User clicks the verification link in their email
+2. Supabase redirects to `https://your-app.com/auth/callback?code=XXXX`
+3. This route handler extracts the `code` query parameter
+4. **Open redirect prevention**: The `next` parameter is validated to ensure it's a relative path (not `//evil.com`)
+5. Calls `supabase.auth.exchangeCodeForSession(code)` — this is the PKCE exchange
+6. If exchange fails → redirects to `/login?error=...`
+7. If exchange succeeds → checks `user_profiles.onboarding_completed`:
+   - `false` → redirects to `/onboarding/step-1`
+   - `true` → redirects to `/chat` (or the `next` param)
+
+**Connected to:**
+- Supabase Auth email templates (the verification email contains a link to this route)
+- `lib/supabase/middleware.ts` → after this route establishes a session, middleware can find the user on subsequent requests
+
+---
+
+## 2.2 Onboarding System
+
+The onboarding wizard is a 4-step flow that **must be completed before accessing the dashboard**. This is enforced by the middleware (Section 1.5.4, Rule 3).
+
+### 2.2.1 Data Flow Overview
+
+```
+Step 1 → localStorage: { college, graduationYear }
+Step 2 → localStorage: { college, graduationYear, department }
+Step 3 → localStorage: { college, graduationYear, department, semester }
+Step 4 → Reads localStorage → Writes to Supabase user_profiles → Clears localStorage → /chat
+```
+
+The key design decision here is that **Steps 1-3 store data in `localStorage` only** — no database writes happen until Step 4. This means:
+- Users can navigate back and forth between steps without hitting the database
+- Partially completed onboarding costs zero database operations
+- All data is submitted atomically in one `upsert` on Step 4
+
+---
+
+### 2.2.2 Onboarding Layout — `app/onboarding/layout.tsx`
+
+```typescript
+// app/onboarding/layout.tsx
+import { GraduationCap } from "lucide-react";
+
+export default function OnboardingLayout({ children }: { children: React.ReactNode }) {
+    return (
+        <div className="min-h-screen bg-gradient-to-br from-indigo-50 via-white to-blue-50 
+                        flex items-center justify-center p-4">
+            <div className="absolute top-6 left-6">
+                <a href="/" className="flex items-center gap-2">
+                    <div className="w-9 h-9 bg-indigo-600 rounded-lg flex items-center justify-center">
+                        <GraduationCap className="w-5 h-5 text-white" />
+                    </div>
+                    <span className="text-lg font-bold text-gray-900">KTU Exam Prep AI</span>
+                </a>
+            </div>
+            <div className="w-full max-w-lg animate-slide-up-fade">
+                {children}
+            </div>
+        </div>
+    );
+}
+```
+
+**What it does:**
+- Identical visual style to the auth layout (same gradient, logo positioning)
+- Constrains children to `max-w-lg` (512px) and centers them
+- Applies a slide-up-fade animation on page transitions
+
+**Connected to:** All 4 step pages inherit this layout.
+
+---
+
+### 2.2.3 Step 1: College Selection — `app/onboarding/step-1/page.tsx`
+
+```typescript
+// app/onboarding/step-1/page.tsx
+"use client";
+
+import { useState } from "react";
+import { useRouter } from "next/navigation";
+import { ArrowRight } from "lucide-react";
+import { ProgressIndicator } from "@/components/onboarding/ProgressIndicator";
+import { CollegeSelector } from "@/components/onboarding/CollegeSelector";
+
+export default function Step1Page() {
+    const router = useRouter();
+    const [college, setCollege] = useState("");
+    const [graduationYear, setGraduationYear] = useState("");
+
+    const canProceed = college !== "" && graduationYear !== "";
+
+    const handleNext = () => {
+        localStorage.setItem(
+            "onboarding",
+            JSON.stringify({ college, graduationYear })
+        );
+        router.push("/onboarding/step-2");
+    };
+
+    // Renders:
+    // - ProgressIndicator (dot 1 of 4 is active)
+    // - CollegeSelector (searchable dropdown with 130+ KTU colleges)
+    // - Graduation Year dropdown (2024-2030)
+    // - "Next" button (disabled until both fields are filled)
+}
+```
+
+**User interaction:**
+1. User sees "Tell us about yourself" heading
+2. `<CollegeSelector />` renders a searchable dropdown with **130+ KTU-affiliated colleges** (list from `types/index.ts` → `KTU_COLLEGES` array). User types to filter and select their college.
+3. Graduation Year dropdown offers 2024-2030
+4. Both must be selected before "Next" button activates
+5. On click: saves `{ college, graduationYear }` to `localStorage` key `"onboarding"`, navigates to Step 2
+
+**Connected to:**
+- `components/onboarding/CollegeSelector.tsx` → searchable dropdown component
+- `components/onboarding/ProgressIndicator.tsx` → shows 4 dots, dot 1 highlighted
+- `types/index.ts` → `KTU_COLLEGES` array (130+ colleges)
+
+---
+
+### 2.2.4 Step 2: Department Selection — `app/onboarding/step-2/page.tsx`
+
+```typescript
+// app/onboarding/step-2/page.tsx
+"use client";
+
+import { useState } from "react";
+import { useRouter } from "next/navigation";
+import { ArrowLeft, ArrowRight } from "lucide-react";
+import { ProgressIndicator } from "@/components/onboarding/ProgressIndicator";
+import { DepartmentCards } from "@/components/onboarding/DepartmentCards";
+
+export default function Step2Page() {
+    const router = useRouter();
+    const [department, setDepartment] = useState("");
+
+    const handleNext = () => {
+        const existing = JSON.parse(localStorage.getItem("onboarding") || "{}");
+        localStorage.setItem(
+            "onboarding",
+            JSON.stringify({ ...existing, department })
+        );
+        router.push("/onboarding/step-3");
+    };
+
+    // Renders: ProgressIndicator, DepartmentCards, Back + Next buttons
+}
+```
+
+**User interaction:**
+1. User sees "Select Your Department" heading
+2. `<DepartmentCards />` renders 5 visual cards from `DEPARTMENTS` constant in `types/index.ts`:
+   - ⚙️ Computer Science & Engineering (CSE)
+   - 🏗️ Civil Engineering (CE)
+   - 🔧 Mechanical Engineering (ME)
+   - ⚡ Electrical & Electronics Engineering (EEE)
+   - 📡 Electronics & Communication Engineering (ECE)
+3. User clicks one → card highlights with indigo border
+4. On "Next": merges `{ department }` into existing localStorage data, navigates to Step 3
+5. "Back" button returns to Step 1
+
+**Connected to:**
+- `components/onboarding/DepartmentCards.tsx` → card-based selection UI
+- `types/index.ts` → `DEPARTMENTS` array with id, name, shortName, icon
+
+---
+
+### 2.2.5 Step 3: Semester Selection — `app/onboarding/step-3/page.tsx`
+
+```typescript
+// app/onboarding/step-3/page.tsx
+"use client";
+
+import { useState } from "react";
+import { useRouter } from "next/navigation";
+import { ArrowLeft, ArrowRight } from "lucide-react";
+import { ProgressIndicator } from "@/components/onboarding/ProgressIndicator";
+import { SemesterGrid } from "@/components/onboarding/SemesterGrid";
+
+export default function Step3Page() {
+    const router = useRouter();
+    const [semester, setSemester] = useState(0);
+
+    const handleNext = () => {
+        const existing = JSON.parse(localStorage.getItem("onboarding") || "{}");
+        localStorage.setItem(
+            "onboarding",
+            JSON.stringify({ ...existing, semester })
+        );
+        router.push("/onboarding/step-4");
+    };
+
+    // Renders: ProgressIndicator, SemesterGrid (1-8), Back + Next buttons
+}
+```
+
+**User interaction:**
+1. User sees "Current Semester" heading
+2. `<SemesterGrid />` renders 8 buttons in a grid (Semester 1 through 8)
+3. User clicks one → button highlights
+4. On "Next": merges `{ semester }` into localStorage, navigates to Step 4
+
+**Connected to:**
+- `components/onboarding/SemesterGrid.tsx` → 4x2 grid of semester buttons
+
+---
+
+### 2.2.6 Step 4: Referral & Final Submit — `app/onboarding/step-4/page.tsx`
+
+This is the most important step — it's the only one that writes to the database.
+
+```typescript
+// app/onboarding/step-4/page.tsx
+"use client";
+
+import { useState } from "react";
+import { useRouter } from "next/navigation";
+import { ArrowLeft, Loader2, Sparkles } from "lucide-react";
+import { ProgressIndicator } from "@/components/onboarding/ProgressIndicator";
+import { ReferralOptions } from "@/components/onboarding/ReferralOptions";
+import { createClient } from "@/lib/supabase/client";
+
+export default function Step4Page() {
+    const router = useRouter();
+    const [referral, setReferral] = useState("");
+    const [isSubmitting, setIsSubmitting] = useState(false);
+
+    const handleComplete = async () => {
+        setIsSubmitting(true);
+
+        // 1. Read all data from localStorage
+        let existing: Record<string, unknown> = {};
+        try {
+            existing = JSON.parse(localStorage.getItem("onboarding") || "{}");
+        } catch {
+            existing = {};
+        }
+        const onboardingData = { ...existing, referral };
+
+        // 2. Validate and sanitize all fields
+        const collegeName = typeof onboardingData.college === "string"
+            ? onboardingData.college.slice(0, 200) : "";
+        const gradYear = Number(onboardingData.graduationYear);
+        const validGradYear = Number.isInteger(gradYear) && gradYear >= 2020 && gradYear <= 2035
+            ? gradYear : 2025;
+        const branch = typeof onboardingData.department === "string"
+            ? onboardingData.department.slice(0, 50) : "";
+        const semester = Number(onboardingData.semester);
+        const validSemester = Number.isInteger(semester) && semester >= 1 && semester <= 8
+            ? semester : 1;
+
+        // 3. Get current authenticated user
+        const supabase = createClient();
+        const { data: { user } } = await supabase.auth.getUser();
+
+        // 4. Upsert the complete profile
+        if (user) {
+            await supabase.from("user_profiles").upsert({
+                id: user.id,
+                full_name: user.user_metadata?.full_name || "",
+                email: user.email,
+                college_name: collegeName,
+                graduation_year: validGradYear,
+                branch: branch,
+                semester: validSemester,
+                referral_source: referral,
+                onboarding_completed: true,  // ← THE KEY FLAG
+            });
+        }
+
+        // 5. Cleanup and navigate
+        localStorage.removeItem("onboarding");
+        router.push("/chat");
+        router.refresh();
+    };
+
+    // Renders: ProgressIndicator, ReferralOptions, Back + "Get Started" buttons
+}
+```
+
+**Step-by-step flow:**
+
+1. User sees "How did you hear about us?" with 7 referral options from `REFERRAL_OPTIONS` in `types/index.ts`:
+   - 👥 Friend or Classmate
+   - 📱 Instagram
+   - 💬 WhatsApp/Telegram
+   - 🔍 Google Search
+   - 📘 Facebook
+   - 🎓 College Notice/Poster
+   - 📰 Other
+
+2. User selects one → "Get Started" button activates
+
+3. On click (`handleComplete`):
+   - Reads ALL accumulated data from `localStorage["onboarding"]`
+   - **Validates each field** defensively (type checks, range limits, string truncation)
+   - Gets the authenticated user from Supabase
+   - **Upserts** into `user_profiles` with `onboarding_completed: true`
+   - Deletes the `"onboarding"` key from localStorage (cleanup)
+   - Navigates to `/chat` and refreshes
+
+4. **After this**: The middleware will see `onboarding_completed: true` and allow access to all dashboard routes.
+
+**What gets written to the database:**
+
+```sql
+INSERT INTO user_profiles (
+    id, full_name, email, college_name, graduation_year,
+    branch, semester, referral_source, onboarding_completed
+) VALUES (
+    'user-uuid', 'John Doe', 'john@example.com', 'College of Engineering, Trivandrum',
+    2026, 'Computer Science & Engineering', 3, 'friend', true
+)
+ON CONFLICT (id) DO UPDATE SET
+    college_name = EXCLUDED.college_name,
+    graduation_year = EXCLUDED.graduation_year,
+    branch = EXCLUDED.branch,
+    semester = EXCLUDED.semester,
+    referral_source = EXCLUDED.referral_source,
+    onboarding_completed = EXCLUDED.onboarding_completed;
+```
+
+**Connected to:**
+- `lib/supabase/client.ts` → browser Supabase client for the upsert
+- `supabase/schema.sql` → `user_profiles` table
+- `lib/supabase/middleware.ts` → Rule 3 now allows dashboard access since `onboarding_completed = true`
+- `types/index.ts` → `REFERRAL_OPTIONS` array
+- `components/onboarding/ReferralOptions.tsx` → referral selection UI
+
+---
+
+### 2.2.7 Onboarding Components Summary
+
+| Component | File | Purpose |
+|-----------|------|---------|
+| `ProgressIndicator` | `components/onboarding/ProgressIndicator.tsx` | Shows 4 dots at top, `currentStep` prop highlights the active dot (indigo) |
+| `CollegeSelector` | `components/onboarding/CollegeSelector.tsx` | Searchable dropdown with 130+ colleges from `KTU_COLLEGES`. User types → filters → selects |
+| `DepartmentCards` | `components/onboarding/DepartmentCards.tsx` | 5 clickable cards with emoji icons and department names from `DEPARTMENTS` |
+| `SemesterGrid` | `components/onboarding/SemesterGrid.tsx` | 4×2 grid of 8 semester buttons (1-8) |
+| `ReferralOptions` | `components/onboarding/ReferralOptions.tsx` | 7 clickable referral buttons with emoji icons from `REFERRAL_OPTIONS` |
+
+---
+
+### 2.2.8 Complete Auth + Onboarding Flow Diagram
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                        FIRST VISIT                                  │
+│                                                                     │
+│  User visits /  ──→  Landing Page (public)                          │
+│  User clicks "Get Started"  ──→  /signup                            │
+│                                                                     │
+│  ┌─────────────────────────────────────────────────────────┐        │
+│  │  SIGNUP FLOW                                             │        │
+│  │  1. Fill form (name, email, password, confirm password)  │        │
+│  │  2. Zod validates + password strength check              │        │
+│  │  3. supabase.auth.signUp() → auth.users row created      │        │
+│  │  4. user_profiles row created (onboarding_completed=false)│       │
+│  │  5. router.push("/onboarding/step-1")                    │        │
+│  └──────────────────────────┬──────────────────────────────┘        │
+│                             │                                       │
+│                             ▼                                       │
+│  ┌─────────────────────────────────────────────────────────┐        │
+│  │  ONBOARDING FLOW                                         │        │
+│  │                                                           │       │
+│  │  Step 1 ──→ College + Grad Year ──→ localStorage          │       │
+│  │      │                                                    │       │
+│  │      ▼                                                    │       │
+│  │  Step 2 ──→ Department ──→ localStorage (merged)          │       │
+│  │      │                                                    │       │
+│  │      ▼                                                    │       │
+│  │  Step 3 ──→ Semester ──→ localStorage (merged)            │       │
+│  │      │                                                    │       │
+│  │      ▼                                                    │       │
+│  │  Step 4 ──→ Referral ──→ Supabase upsert ──→ /chat       │       │
+│  │             (onboarding_completed = true)                  │       │
+│  │             (localStorage cleared)                         │       │
+│  └─────────────────────────────────────────────────────────┘        │
+│                                                                     │
+└─────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────┐
+│                      RETURNING USER                                 │
+│                                                                     │
+│  User visits /login  ──→  LoginForm                                 │
+│  1. Fill email + password                                           │
+│  2. supabase.auth.signInWithPassword()                              │
+│  3. router.push("/chat") → router.refresh()                         │
+│  4. Middleware checks onboarding_completed:                         │
+│     ├── true  → Allow access to /chat                               │
+│     └── false → Redirect to /onboarding/step-1                      │
+│                                                                     │
+│  If already logged in and visits /login:                            │
+│     Middleware Rule 2 → Redirect to /chat                           │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+*End of Part 2.*
+
+---
+
+# Part 3: Dashboard Layout & Sidebar
+
+## 3.1 Dashboard Layout — `app/(dashboard)/layout.tsx`
+
+Once a user completes onboarding and lands on `/chat`, they enter the **dashboard**. The `(dashboard)` route group wraps all protected pages: `/chat`, `/courses`, `/patterns`, and `/profile`.
+
+This is a **client component** because it manages sidebar open/close state.
+
+```typescript
+// app/(dashboard)/layout.tsx
+"use client";
+
+import { useState } from "react";
+import { GraduationCap, Menu, X } from "lucide-react";
+import { NewChatButton } from "@/components/sidebar/NewChatButton";
+import { NavigationLinks } from "@/components/sidebar/NavigationLinks";
+import { RecentChats } from "@/components/sidebar/RecentChats";
+import { UserProfile } from "@/components/sidebar/UserProfile";
+import { useStudyTimer } from "@/hooks/useStudyTimer";
+
+// Silent component — runs the study timer without rendering anything
+function StudyTimerTracker() {
+    useStudyTimer();
+    return null;
+}
+
+export default function DashboardLayout({ children }: { children: React.ReactNode }) {
+    const [sidebarOpen, setSidebarOpen] = useState(false);
+    const closeSidebar = () => setSidebarOpen(false);
+
+    return (
+        <div className="flex h-screen bg-gray-50">
+            <StudyTimerTracker />
+
+            {/* Mobile backdrop overlay */}
+            {sidebarOpen && (
+                <div
+                    className="fixed inset-0 bg-black/40 z-40 lg:hidden"
+                    onClick={closeSidebar}
+                />
+            )}
+
+            {/* Sidebar — fixed on mobile, relative on desktop */}
+            <aside className={`fixed inset-y-0 left-0 z-50 w-[280px] bg-white border-r 
+                border-gray-200 flex flex-col transform transition-transform duration-300 
+                ease-in-out lg:relative lg:translate-x-0
+                ${sidebarOpen ? "translate-x-0" : "-translate-x-full"}`}>
+                
+                {/* Logo + close button */}
+                <div className="flex items-center justify-between h-16 px-5 border-b border-gray-100">
+                    <div className="flex items-center gap-2.5">
+                        <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center">
+                            <GraduationCap className="w-5 h-5 text-white" />
+                        </div>
+                        <span className="text-base font-bold text-gray-900">KTU Exam Prep</span>
+                    </div>
+                    <button onClick={closeSidebar} className="lg:hidden p-1.5 hover:bg-gray-100 rounded-md">
+                        <X className="w-5 h-5 text-gray-500" />
+                    </button>
+                </div>
+
+                {/* New Chat Button */}
+                <div className="px-5 py-4">
+                    <NewChatButton onNavigate={closeSidebar} />
+                </div>
+
+                {/* Navigation Links (Patterns, Courses) */}
+                <div className="px-3">
+                    <NavigationLinks onNavigate={closeSidebar} />
+                </div>
+
+                <hr className="mx-5 my-2 border-gray-100" />
+
+                {/* Recent Chats (scrollable, fills remaining space) */}
+                <RecentChats onNavigate={closeSidebar} />
+
+                <hr className="mx-5 border-gray-100" />
+
+                {/* User Profile (fixed at bottom) */}
+                <div className="px-3 py-2">
+                    <UserProfile />
+                </div>
+            </aside>
+
+            {/* Main Content */}
+            <main className="flex-1 flex flex-col min-w-0">
+                {/* Mobile header with hamburger menu */}
+                <div className="lg:hidden flex items-center h-14 px-4 bg-white border-b border-gray-200">
+                    <button onClick={() => setSidebarOpen(true)} className="p-2 hover:bg-gray-100 rounded-lg -ml-2">
+                        <Menu className="w-5 h-5 text-gray-600" />
+                    </button>
+                    <div className="flex items-center gap-2 ml-3">
+                        <div className="w-6 h-6 bg-indigo-600 rounded-md flex items-center justify-center">
+                            <GraduationCap className="w-4 h-4 text-white" />
+                        </div>
+                        <span className="text-sm font-semibold text-gray-900">KTU Exam Prep</span>
+                    </div>
+                </div>
+
+                {children}
+            </main>
+        </div>
+    );
+}
+```
+
+### Layout Structure (Visual)
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│  FULL SCREEN (flex h-screen)                                     │
+│                                                                  │
+│  ┌─────────────────┐  ┌─────────────────────────────────────┐   │
+│  │  SIDEBAR (280px) │  │  MAIN CONTENT (flex-1)              │   │
+│  │                  │  │                                     │   │
+│  │  ┌────────────┐  │  │  ┌─────────────────────────────┐   │   │
+│  │  │ Logo + X   │  │  │  │ Mobile Header (lg:hidden)    │   │   │
+│  │  └────────────┘  │  │  │ ☰ Menu  + Logo               │   │   │
+│  │  ┌────────────┐  │  │  └─────────────────────────────┘   │   │
+│  │  │ + New Chat │  │  │                                     │   │
+│  │  └────────────┘  │  │  ┌─────────────────────────────┐   │   │
+│  │  ┌────────────┐  │  │  │                               │   │   │
+│  │  │ Patterns   │  │  │  │       {children}              │   │   │
+│  │  │ Courses    │  │  │  │                               │   │   │
+│  │  └────────────┘  │  │  │  (ChatInterface, Courses,     │   │   │
+│  │  ──────────────  │  │  │   Patterns, or Profile page)  │   │   │
+│  │  ┌────────────┐  │  │  │                               │   │   │
+│  │  │ Recent     │  │  │  └─────────────────────────────┘   │   │
+│  │  │ Chats      │  │  │                                     │   │
+│  │  │ (scroll)   │  │  │                                     │   │
+│  │  │            │  │  │                                     │   │
+│  │  └────────────┘  │  │                                     │   │
+│  │  ──────────────  │  │                                     │   │
+│  │  ┌────────────┐  │  │                                     │   │
+│  │  │ User       │  │  │                                     │   │
+│  │  │ Profile    │  │  │                                     │   │
+│  │  └────────────┘  │  │                                     │   │
+│  └─────────────────┘  └─────────────────────────────────────┘   │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+### Key Design Decisions
+
+1. **`<StudyTimerTracker />`** — A "headless" component that renders **nothing** (`return null`) but runs the `useStudyTimer()` hook. This ensures study time tracking starts the moment the dashboard loads and runs as long as the user is on any dashboard page.
+
+2. **Responsive sidebar** — On desktop (`lg:` breakpoint, ≥1024px), the sidebar is always visible (`lg:relative lg:translate-x-0`). On mobile, it slides in from the left with a CSS transform transition (`-translate-x-full` → `translate-x-0`) and a dark backdrop overlay.
+
+3. **`onNavigate` prop** — Every sidebar component receives this callback. When an item is clicked on mobile, it calls `closeSidebar()` to dismiss the sidebar after navigation.
+
+**Connected to:**
+- `components/sidebar/NewChatButton.tsx` → "New Chat" button
+- `components/sidebar/NavigationLinks.tsx` → Patterns + Courses links
+- `components/sidebar/RecentChats.tsx` → scrollable chat history list
+- `components/sidebar/UserProfile.tsx` → user avatar + sign out
+- `hooks/useStudyTimer.ts` → active study time tracking
+- `app/(dashboard)/chat/page.tsx` → the `{children}` slot
+
+---
+
+## 3.2 Sidebar Components
+
+### 3.2.1 NewChatButton — `components/sidebar/NewChatButton.tsx`
+
+```typescript
+// components/sidebar/NewChatButton.tsx
+"use client";
+
+import { Plus } from "lucide-react";
+import { useRouter } from "next/navigation";
+
+interface NewChatButtonProps {
+    onNavigate?: () => void;
+}
+
+export function NewChatButton({ onNavigate }: NewChatButtonProps) {
+    const router = useRouter();
+
+    const handleClick = () => {
+        router.push("/chat");     // Navigate to /chat WITHOUT an ?id= param
+        onNavigate?.();           // Close sidebar on mobile
+    };
+
+    return (
+        <button
+            onClick={handleClick}
+            className="w-full flex items-center justify-center gap-2 px-4 py-2.5 
+                       bg-indigo-600 text-white font-medium rounded-lg hover:bg-indigo-700 
+                       active:scale-[0.98] transition-all duration-200 text-sm h-[44px]"
+        >
+            <Plus className="w-4 h-4" />
+            New Chat
+        </button>
+    );
+}
+```
+
+**What it does:**
+- Navigates to `/chat` **without** a `?id=` query parameter
+- This causes `ChatInterface` (Section 4) to show the empty state (suggested prompts) instead of loading an existing conversation
+- The `active:scale-[0.98]` creates a subtle press animation
+- `onNavigate?.()` closes the mobile sidebar after clicking
+
+**Connected to:**
+- `app/(dashboard)/chat/page.tsx` → the destination
+- `components/chat/ChatInterface.tsx` → when `conversationId` is `null`, shows empty state
+
+---
+
+### 3.2.2 NavigationLinks — `components/sidebar/NavigationLinks.tsx`
+
+```typescript
+// components/sidebar/NavigationLinks.tsx
+"use client";
+
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+import { BarChart3, BookOpen } from "lucide-react";
+import { cn } from "@/lib/utils";
+
+const links = [
+    { href: "/patterns", label: "Patterns", icon: BarChart3 },
+    { href: "/courses", label: "Courses", icon: BookOpen },
+];
+
+interface NavigationLinksProps {
+    onNavigate?: () => void;
+}
+
+export function NavigationLinks({ onNavigate }: NavigationLinksProps) {
+    const pathname = usePathname();
+
+    return (
+        <nav className="space-y-1">
+            {links.map((link) => {
+                const isActive = pathname === link.href;
+                return (
+                    <Link
+                        key={link.href}
+                        href={link.href}
+                        onClick={onNavigate}
+                        className={cn(
+                            "flex items-center gap-3 h-10 px-4 rounded-md text-sm font-medium transition-all duration-150",
+                            isActive
+                                ? "bg-indigo-50 text-indigo-600 border-l-[3px] border-indigo-600"
+                                : "text-gray-600 hover:bg-gray-100"
+                        )}
+                    >
+                        <link.icon className="w-5 h-5 shrink-0" />
+                        {link.label}
+                    </Link>
+                );
+            })}
+        </nav>
+    );
+}
+```
+
+**What it does:**
+- Renders 2 navigation links: Patterns (📊) and Courses (📚)
+- Uses `usePathname()` to determine which link is active
+- Active link gets: indigo background, indigo text, 3px indigo left border
+- Inactive link gets: gray text, hover:gray-100 background
+- Uses `cn()` utility from `lib/utils.ts` (wraps `clsx` + `tailwind-merge`)
+
+**Connected to:**
+- `app/(dashboard)/patterns/page.tsx` → Patterns page
+- `app/(dashboard)/courses/page.tsx` → Courses page
+- `lib/utils.ts` → `cn()` utility for conditional class merging
+
+---
+
+### 3.2.3 RecentChats — `components/sidebar/RecentChats.tsx`
+
+This is the most complex sidebar component. It fetches, displays, and manages the user's conversation history with **real-time updates**.
+
+```typescript
+// components/sidebar/RecentChats.tsx
+"use client";
+
+import { useState, useEffect, useCallback } from "react";
+import { useSearchParams } from "next/navigation";
+import { MessageSquare } from "lucide-react";
+import { createClient } from "@/lib/supabase/client";
+import { ChatItem } from "./ChatItem";
+
+interface Conversation {
+    id: string;
+    title: string;
+    updated_at: string;
+    created_at: string;
+}
+
+export function RecentChats({ onNavigate }: { onNavigate?: () => void }) {
+    const searchParams = useSearchParams();
+    const activeId = searchParams.get("id");          // Currently active conversation
+    const [conversations, setConversations] = useState<Conversation[]>([]);
+    const [isLoading, setIsLoading] = useState(true);
+
+    const supabase = createClient();
+
+    // ---- Fetch all conversations from database ----
+    const fetchConversations = useCallback(async () => {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) return;
+
+        const { data } = await supabase
+            .from("conversations")
+            .select("id, title, updated_at, created_at")
+            .eq("user_id", user.id)
+            .order("updated_at", { ascending: false })
+            .limit(50);
+
+        setConversations(data || []);
+        setIsLoading(false);
+    }, [supabase]);
+
+    useEffect(() => {
+        fetchConversations();
+
+        // ---- Real-time subscription via Supabase Realtime ----
+        const channel = supabase
+            .channel("conversations-changes")
+            .on(
+                "postgres_changes",
+                { event: "*", schema: "public", table: "conversations" },
+                () => { fetchConversations(); }
+            )
+            .subscribe();
+
+        // ---- Local custom event from ChatInterface ----
+        const handleConversationUpdated = () => { fetchConversations(); };
+        window.addEventListener("conversation-updated", handleConversationUpdated);
+
+        return () => {
+            supabase.removeChannel(channel);
+            window.removeEventListener("conversation-updated", handleConversationUpdated);
+        };
+    }, [fetchConversations, supabase]);
+
+    // ---- Rename conversation (optimistic update) ----
+    const handleRename = async (id: string, newTitle: string) => {
+        // Optimistic: update UI immediately
+        setConversations((prev) =>
+            prev.map((c) => (c.id === id ? { ...c, title: newTitle } : c))
+        );
+        // Then persist to database
+        const { error } = await supabase
+            .from("conversations")
+            .update({ title: newTitle })
+            .eq("id", id);
+
+        if (error) fetchConversations();  // Revert on failure
+    };
+
+    // ---- Delete conversation (optimistic update) ----
+    const handleDelete = async (id: string) => {
+        // Optimistic: remove from UI immediately
+        setConversations((prev) => prev.filter((c) => c.id !== id));
+        // Then delete from database (messages first due to FK constraint, then conversation)
+        await supabase.from("messages").delete().eq("conversation_id", id);
+        const { error } = await supabase.from("conversations").delete().eq("id", id);
+
+        if (error) fetchConversations();  // Revert on failure
+    };
+
+    // ---- Loading state: skeleton placeholders ----
+    if (isLoading) {
+        return (
+            <div className="px-5 py-4">
+                <div className="space-y-2">
+                    {[1, 2, 3].map((i) => (
+                        <div key={i} className="h-10 bg-gray-100 rounded-md animate-pulse" />
+                    ))}
+                </div>
+            </div>
+        );
+    }
+
+    // ---- Empty state ----
+    // Shows MessageSquare icon + "No chats yet" text
+
+    // ---- Conversation list ----
+    // Maps over conversations array, renders <ChatItem /> for each
+    // Passes activeId to highlight current conversation
+}
+```
+
+**Two update mechanisms (dual channel):**
+
+1. **Supabase Realtime** (`postgres_changes`) — WebSocket subscription on the `conversations` table. Any INSERT/UPDATE/DELETE from **any source** (including other tabs) triggers a refetch. This ensures the sidebar stays in sync if the user has multiple tabs open.
+
+2. **Custom DOM event** (`conversation-updated`) — When `ChatInterface` creates a new conversation or sends a message, it dispatches `window.dispatchEvent(new CustomEvent("conversation-updated"))`. This provides an **instant** update without waiting for the Realtime WebSocket round-trip.
+
+**Optimistic updates:**
+- Rename and delete update the local `conversations` state **immediately** before the database call completes
+- If the database call fails, `fetchConversations()` is called to revert to the true state
+
+**Delete order matters:**
+```
+1. DELETE FROM messages WHERE conversation_id = 'xxx'   ← FK constraint requires this first
+2. DELETE FROM conversations WHERE id = 'xxx'
+```
+
+**Connected to:**
+- `lib/supabase/client.ts` → browser Supabase client
+- `components/sidebar/ChatItem.tsx` → individual chat entry rendering
+- `components/chat/ChatInterface.tsx` → dispatches `conversation-updated` event
+- `supabase/schema.sql` → `conversations` and `messages` tables
+
+---
+
+### 3.2.4 ChatItem — `components/sidebar/ChatItem.tsx`
+
+Each conversation in the sidebar is rendered as a `ChatItem`.
+
+```typescript
+// components/sidebar/ChatItem.tsx
+"use client";
+
+import { useState } from "react";
+import { useRouter } from "next/navigation";
+import { MessageSquare } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { ChatItemMenu } from "./ChatItemMenu";
+
+interface ChatItemProps {
+    id: string;
+    title: string;
+    isActive: boolean;
+    onRename: (id: string, newTitle: string) => void;
+    onDelete: (id: string) => void;
+    onNavigate?: () => void;
+}
+
+export function ChatItem({ id, title, isActive, onRename, onDelete, onNavigate }: ChatItemProps) {
+    const router = useRouter();
+    const [isRenaming, setIsRenaming] = useState(false);
+    const [renameValue, setRenameValue] = useState(title);
+
+    const handleClick = () => {
+        if (!isRenaming) {
+            router.push(`/chat?id=${id}`);   // Navigate to this specific conversation
+            onNavigate?.();
+        }
+    };
+
+    const handleRenameSubmit = () => {
+        const trimmed = renameValue.trim();
+        if (trimmed && trimmed !== title) {
+            onRename(id, trimmed);
+        }
+        setIsRenaming(false);
+    };
+
+    const handleRenameKeyDown = (e: React.KeyboardEvent) => {
+        if (e.key === "Enter") handleRenameSubmit();
+        else if (e.key === "Escape") {
+            setIsRenaming(false);
+            setRenameValue(title);
+        }
+    };
+
+    return (
+        <div
+            onClick={handleClick}
+            className={cn(
+                "group flex items-center gap-2.5 h-12 px-3 rounded-md mb-1 cursor-pointer transition-all duration-150",
+                isActive
+                    ? "bg-indigo-50 border-l-[3px] border-indigo-600"
+                    : "hover:bg-gray-100"
+            )}
+        >
+            <MessageSquare className={cn(
+                "w-[18px] h-[18px] shrink-0",
+                isActive ? "text-indigo-600" : "text-gray-400"
+            )} />
+
+            {isRenaming ? (
+                <input
+                    autoFocus
+                    value={renameValue}
+                    onChange={(e) => setRenameValue(e.target.value)}
+                    onBlur={handleRenameSubmit}
+                    onKeyDown={handleRenameKeyDown}
+                    onClick={(e) => e.stopPropagation()}
+                    maxLength={100}
+                    className="flex-1 min-w-0 text-sm bg-white border border-indigo-300 rounded px-1.5 py-0.5 
+                               focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                />
+            ) : (
+                <span className={cn(
+                    "flex-1 min-w-0 text-sm font-medium truncate",
+                    isActive ? "text-indigo-900" : "text-gray-700"
+                )}>
+                    {title}
+                </span>
+            )}
+
+            {!isRenaming && (
+                <ChatItemMenu
+                    chatId={id}
+                    onRename={() => handleRenameStart()}
+                    onDelete={() => onDelete(id)}
+                />
+            )}
+        </div>
+    );
+}
+```
+
+**Features:**
+- **Active state**: Highlighted with indigo background + left border when `?id=` matches
+- **Inline rename**: When the user triggers rename from the menu, the title text transforms into an `<input>` field. Submit on Enter or blur, cancel on Escape.
+- **Title truncation**: `truncate` class ensures long titles don't break the layout
+- **Three-dot menu**: `<ChatItemMenu />` appears on hover (via `group-hover:opacity-100`)
+
+**Connected to:**
+- `components/sidebar/ChatItemMenu.tsx` → the three-dot dropdown menu
+- `components/sidebar/RecentChats.tsx` → parent that provides `onRename` and `onDelete` callbacks
+- `app/(dashboard)/chat/page.tsx` → navigates to `/chat?id={conversationId}`
+
+---
+
+### 3.2.5 ChatItemMenu — `components/sidebar/ChatItemMenu.tsx`
+
+```typescript
+// components/sidebar/ChatItemMenu.tsx
+"use client";
+
+import { useState, useRef, useEffect } from "react";
+import { MoreVertical, Pencil, Trash2 } from "lucide-react";
+
+interface ChatItemMenuProps {
+    chatId: string;
+    onRename: (id: string) => void;
+    onDelete: (id: string) => void;
+}
+
+export function ChatItemMenu({ chatId, onRename, onDelete }: ChatItemMenuProps) {
+    const [open, setOpen] = useState(false);
+    const menuRef = useRef<HTMLDivElement>(null);
+
+    // Close menu when clicking outside
+    useEffect(() => {
+        function handleClickOutside(e: MouseEvent) {
+            if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+                setOpen(false);
+            }
+        }
+        if (open) {
+            document.addEventListener("mousedown", handleClickOutside);
+            return () => document.removeEventListener("mousedown", handleClickOutside);
+        }
+    }, [open]);
+
+    return (
+        <div ref={menuRef} className="relative">
+            {/* Three-dot trigger — visible only on parent hover */}
+            <button
+                onClick={(e) => { e.preventDefault(); e.stopPropagation(); setOpen(!open); }}
+                className="p-1 rounded hover:bg-gray-200 transition-colors 
+                           opacity-0 group-hover:opacity-100 data-[open=true]:opacity-100"
+                data-open={open}
+                aria-label="Chat options"
+            >
+                <MoreVertical className="w-4 h-4 text-gray-400" />
+            </button>
+
+            {/* Dropdown menu */}
+            {open && (
+                <div className="absolute right-0 top-full mt-1 w-40 bg-white border border-gray-200 
+                               rounded-lg shadow-lg z-50 py-1">
+                    <button
+                        onClick={(e) => { e.preventDefault(); e.stopPropagation(); setOpen(false); onRename(chatId); }}
+                        className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-100"
+                    >
+                        <Pencil className="w-4 h-4" /> Rename
+                    </button>
+                    <button
+                        onClick={(e) => { e.preventDefault(); e.stopPropagation(); setOpen(false); onDelete(chatId); }}
+                        className="w-full flex items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-red-50"
+                    >
+                        <Trash2 className="w-4 h-4" /> Delete
+                    </button>
+                </div>
+            )}
+        </div>
+    );
+}
+```
+
+**Key implementation details:**
+
+- **Event propagation**: Every click uses `e.stopPropagation()` to prevent the parent `ChatItem`'s `onClick` from also firing (which would navigate to the conversation)
+- **Click outside**: A `mousedown` event listener on `document` closes the menu when clicking anywhere outside `menuRef`
+- **Visibility**: The three-dot icon is `opacity-0` by default and only appears on `.group-hover` (when hovering the parent `ChatItem`). Once the menu is open, `data-[open=true]:opacity-100` keeps it visible.
+
+**Connected to:**
+- `components/sidebar/ChatItem.tsx` → parent that renders this menu
+- `components/sidebar/RecentChats.tsx` → grandparent that handles the actual rename/delete DB operations
+
+---
+
+### 3.2.6 UserProfile — `components/sidebar/UserProfile.tsx`
+
+Fixed at the bottom of the sidebar, shows the user's avatar, name, email, and provides a menu to access profile settings or sign out.
+
+```typescript
+// components/sidebar/UserProfile.tsx
+"use client";
+
+import { useState, useEffect, useRef } from "react";
+import { useRouter } from "next/navigation";
+import { LogOut, Settings, ChevronUp } from "lucide-react";
+import { createClient } from "@/lib/supabase/client";
+
+export function UserProfile() {
+    const router = useRouter();
+    const [user, setUser] = useState<{ name: string; email: string } | null>(null);
+    const [menuOpen, setMenuOpen] = useState(false);
+    const menuRef = useRef<HTMLDivElement>(null);
+
+    // ---- Load user data on mount ----
+    useEffect(() => {
+        const loadUser = async () => {
+            const supabase = createClient();
+            const { data: { user: authUser } } = await supabase.auth.getUser();
+
+            if (authUser) {
+                // Try profile name first, fall back to auth metadata
+                const { data: profile } = await supabase
+                    .from("user_profiles")
+                    .select("full_name")
+                    .eq("id", authUser.id)
+                    .single();
+
+                setUser({
+                    name: profile?.full_name || authUser.user_metadata?.full_name || "User",
+                    email: authUser.email || "",
+                });
+            }
+        };
+        loadUser();
+    }, []);
+
+    // ---- Click outside handler ----
+    useEffect(() => {
+        function handleClickOutside(e: MouseEvent) {
+            if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+                setMenuOpen(false);
+            }
+        }
+        if (menuOpen) {
+            document.addEventListener("mousedown", handleClickOutside);
+            return () => document.removeEventListener("mousedown", handleClickOutside);
+        }
+    }, [menuOpen]);
+
+    // ---- Sign out ----
+    const handleSignOut = async () => {
+        const supabase = createClient();
+        await supabase.auth.signOut();
+        router.push("/login");
+        router.refresh();
+    };
+
+    if (!user) return null;
+
+    // Generate initials from name (e.g., "John Doe" → "JD")
+    const initials = user.name
+        .split(" ")
+        .map((n) => n[0])
+        .join("")
+        .toUpperCase()
+        .slice(0, 2);
+
+    return (
+        <div ref={menuRef} className="relative">
+            {/* Upward dropdown menu */}
+            {menuOpen && (
+                <div className="absolute bottom-full left-0 right-0 mb-1 bg-white border border-gray-200 
+                               rounded-lg shadow-lg z-50 py-1">
+                    <button onClick={() => { setMenuOpen(false); router.push("/profile"); }}
+                        className="w-full flex items-center gap-2 px-3 py-2.5 text-sm text-gray-700 hover:bg-gray-100">
+                        <Settings className="w-4 h-4" /> Profile Settings
+                    </button>
+                    <hr className="my-1 border-gray-100" />
+                    <button onClick={handleSignOut}
+                        className="w-full flex items-center gap-2 px-3 py-2.5 text-sm text-red-600 hover:bg-red-50">
+                        <LogOut className="w-4 h-4" /> Sign Out
+                    </button>
+                </div>
+            )}
+
+            {/* User profile trigger button */}
+            <button onClick={() => setMenuOpen(!menuOpen)}
+                className="w-full flex items-center gap-3 px-3 py-3 hover:bg-gray-100 rounded-lg">
+                <div className="w-9 h-9 bg-indigo-100 text-indigo-700 rounded-full flex items-center justify-center text-sm font-bold shrink-0">
+                    {initials || "U"}
+                </div>
+                <div className="flex-1 min-w-0 text-left">
+                    <p className="text-sm font-medium text-gray-900 truncate">{user.name}</p>
+                    <p className="text-xs text-gray-500 truncate">{user.email}</p>
+                </div>
+                <ChevronUp className={`w-4 h-4 text-gray-400 transition-transform ${menuOpen ? "rotate-180" : ""}`} />
+            </button>
+        </div>
+    );
+}
+```
+
+**Key details:**
+- **Name resolution priority**: 1) `user_profiles.full_name` → 2) `auth.users.user_metadata.full_name` → 3) `"User"` fallback
+- **Initials**: Generated from the full name (e.g., "John Doe" → "JD") displayed in a circular avatar
+- **Menu direction**: Opens **upward** (`absolute bottom-full`) since the profile is at the bottom of the sidebar
+- **Sign out flow**: `supabase.auth.signOut()` clears cookies → `router.push("/login")` → `router.refresh()` forces middleware to process the now-unauthenticated state
+
+**Connected to:**
+- `lib/supabase/client.ts` → fetch user data, sign out
+- `supabase/schema.sql` → `user_profiles` table (reads `full_name`)
+- `app/(dashboard)/profile/page.tsx` → "Profile Settings" navigates here
+- `app/(auth)/login/page.tsx` → sign out redirects here
+
+---
+
+## 3.3 Study Timer Hook — `hooks/useStudyTimer.ts`
+
+The study timer is a custom React hook that tracks how long a user is **actively using** the application. It only counts time when the browser tab is visible and focused.
+
+### Architecture
+
+The hook is split into two parts:
+
+1. **`useStudyTimer()`** — Runs in the dashboard layout. Tracks active time, saves to database periodically.
+2. **`useLiveSessionSeconds()`** — Runs on the profile page. Provides a live ticking counter for display.
+
+Both share **module-level state** (variables outside the component) so they survive re-renders and can communicate.
+
+```typescript
+// hooks/useStudyTimer.ts
+"use client";
+
+import { useEffect, useRef, useCallback, useState } from "react";
+
+const SAVE_INTERVAL_MS = 60_000; // Save every 60 seconds
+
+// ---- Module-level session tracker (survives re-renders) ----
+let _sessionStartedAt: number | null = null;
+let _pausedAccumulatedMs = 0;
+let _isPaused = true;
+
+function startSession() {
+    if (!_isPaused) return;
+    _isPaused = false;
+    _sessionStartedAt = Date.now();
+}
+
+function pauseSession() {
+    if (_isPaused || !_sessionStartedAt) return;
+    _pausedAccumulatedMs += Date.now() - _sessionStartedAt;
+    _sessionStartedAt = null;
+    _isPaused = true;
+}
+
+function getSessionSeconds(): number {
+    let total = _pausedAccumulatedMs;
+    if (!_isPaused && _sessionStartedAt) {
+        total += Date.now() - _sessionStartedAt;
+    }
+    return Math.floor(total / 1000);
+}
+
+function resetSession() {
+    _pausedAccumulatedMs = 0;
+    _sessionStartedAt = _isPaused ? null : Date.now();
+}
+```
+
+**Why module-level state?** React hooks reinitialize state on re-renders. But the timer needs to track accumulated time across re-renders, hot module replacement, and even component unmount/remount cycles. Module-level variables (`let _sessionStartedAt`, etc.) persist in memory as long as the page is loaded.
+
+### The Main Timer Hook
+
+```typescript
+export function useStudyTimer() {
+    const saveIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+    // ---- Flush accumulated time to the server ----
+    const flush = useCallback(async () => {
+        const seconds = getSessionSeconds();
+        if (seconds < 5) return;  // Don't save trivially small amounts
+
+        resetSession();  // Reset counter before async call
+
+        try {
+            await fetch("/api/study-time", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ seconds }),
+            });
+            window.dispatchEvent(new CustomEvent("study-time-saved"));
+        } catch {
+            // If save fails, add the time back to the accumulator
+            _pausedAccumulatedMs += seconds * 1000;
+        }
+    }, []);
+
+    useEffect(() => {
+        startSession();  // Start tracking when dashboard mounts
+
+        // ---- Visibility API ----
+        const handleVisibilityChange = () => {
+            if (document.hidden) {
+                pauseSession();
+                flush();            // Save when tab becomes hidden
+            } else {
+                startSession();     // Resume when tab becomes visible
+            }
+        };
+
+        // ---- Focus / Blur ----
+        const handleFocus = () => startSession();
+        const handleBlur = () => {
+            pauseSession();
+            flush();                // Save when window loses focus
+        };
+
+        // ---- Periodic save ----
+        saveIntervalRef.current = setInterval(flush, SAVE_INTERVAL_MS);
+
+        document.addEventListener("visibilitychange", handleVisibilityChange);
+        window.addEventListener("focus", handleFocus);
+        window.addEventListener("blur", handleBlur);
+
+        // ---- beforeunload — last chance to save ----
+        const handleBeforeUnload = () => {
+            const seconds = getSessionSeconds();
+            if (seconds >= 5) {
+                navigator.sendBeacon(
+                    "/api/study-time",
+                    new Blob([JSON.stringify({ seconds })], { type: "application/json" })
+                );
+                resetSession();
+            }
+        };
+        window.addEventListener("beforeunload", handleBeforeUnload);
+
+        // ---- Cleanup ----
+        return () => {
+            if (saveIntervalRef.current) clearInterval(saveIntervalRef.current);
+            document.removeEventListener("visibilitychange", handleVisibilityChange);
+            window.removeEventListener("focus", handleFocus);
+            window.removeEventListener("blur", handleBlur);
+            window.removeEventListener("beforeunload", handleBeforeUnload);
+            flush();  // Final save on unmount
+        };
+    }, [flush]);
+}
+```
+
+### Timer Lifecycle
+
+```
+Dashboard loads
+    │
+    ▼
+startSession()  ─── _sessionStartedAt = Date.now(), _isPaused = false
+    │
+    │  (user is actively using the app)
+    │
+    ▼
+Every 60 seconds: flush() → POST /api/study-time → increment_study_time RPC
+    │
+    │  User switches tab or minimizes window
+    ▼
+visibilitychange (hidden) OR blur
+    │
+    ├── pauseSession()  ─── _pausedAccumulatedMs += (now - _sessionStartedAt)
+    │                       _sessionStartedAt = null, _isPaused = true
+    └── flush()  ─── POST /api/study-time with accumulated seconds
+    │
+    │  User returns to the tab
+    ▼
+visibilitychange (visible) OR focus
+    │
+    └── startSession()  ─── _sessionStartedAt = Date.now(), _isPaused = false
+    │
+    │  User closes tab/browser
+    ▼
+beforeunload
+    │
+    └── navigator.sendBeacon("/api/study-time", { seconds })
+        (sendBeacon is fire-and-forget — doesn't block page unload)
+```
+
+### The Display Hook
+
+```typescript
+export function useLiveSessionSeconds() {
+    const [seconds, setSeconds] = useState(0);
+
+    useEffect(() => {
+        // Poll session seconds every second for smooth ticking
+        const interval = setInterval(() => {
+            setSeconds(getSessionSeconds());
+        }, 1000);
+
+        // Also update when time is saved (resets session counter)
+        const handleSaved = () => setSeconds(getSessionSeconds());
+        window.addEventListener("study-time-saved", handleSaved);
+
+        return () => {
+            clearInterval(interval);
+            window.removeEventListener("study-time-saved", handleSaved);
+        };
+    }, []);
+
+    return seconds;
+}
+```
+
+**Used by:** The profile page to display a live ticking "Session: MM:SS" counter alongside the total study time from the database.
+
+### Save Reliability
+
+| Scenario | How time is saved |
+|----------|-------------------|
+| User uses app for 60+ seconds | `setInterval(flush, 60_000)` fires periodically |
+| User switches to another tab | `visibilitychange` → `pauseSession()` + `flush()` |
+| User minimizes the window | `blur` → `pauseSession()` + `flush()` |
+| User closes the tab | `beforeunload` → `navigator.sendBeacon()` |
+| Component unmounts | Cleanup function calls `flush()` |
+| Save fails (network error) | Time is added back: `_pausedAccumulatedMs += seconds * 1000` |
+
+**Connected to:**
+- `app/(dashboard)/layout.tsx` → `<StudyTimerTracker />` runs `useStudyTimer()`
+- `app/api/study-time/route.ts` → the POST endpoint that receives the seconds
+- `supabase/schema.sql` → `increment_study_time()` RPC atomically updates `user_profiles.study_time_minutes`
+- `app/(dashboard)/profile/page.tsx` → uses `useLiveSessionSeconds()` for display
+
+---
+
+*End of Part 3.*
+
+---
+
+# Part 4: AI Chat System & RAG Pipeline
+
+This is the **core feature** of the application — where the user asks questions and receives AI-generated answers based on the KTU syllabus. This section covers the entire journey from keystroke to AI response.
+
+## 4.1 Complete Chat Request Lifecycle
+
+```
+User types question in InputBox
+    │
+    ▼
+InputBox calls onSend(content)  →  ChatInterface.sendMessage(content)
+    │
+    ├── 1. Create optimistic user message (local state)
+    ├── 2. Set isLoading = true (shows TypingIndicator)
+    │
+    ▼
+POST /api/chat  { message, conversationId }
+    │
+    ├── 3. Authenticate user (Supabase session from cookies)
+    ├── 4. Rate limit check (20 req / 60s per user)
+    ├── 5. Validate inputs (Zod-style checks)
+    │
+    ├── 6. If no conversationId → CREATE new conversation
+    │      INSERT INTO conversations (user_id, title)
+    │      title = first 50 chars of message
+    │
+    ├── 7. INSERT user message into messages table
+    │
+    ├── 8. Fetch last 10 messages for conversation history
+    │
+    ├── 9. RAG PIPELINE:
+    │      ├── a. Embed query via OpenAI text-embedding-3-small → 1536-dim vector
+    │      ├── b. Call match_syllabus() RPC → pgvector cosine similarity search
+    │      ├── c. Format matched chunks into context string
+    │      ├── d. Build system prompt with KTU-specific rules + context
+    │      ├── e. Call GPT-4o-mini with system prompt + history + user message
+    │      └── f. Extract answer + format source citations
+    │
+    ├── 10. INSERT AI response into messages table (with sources JSONB)
+    ├── 11. UPDATE conversation.updated_at (triggers sidebar reorder)
+    │
+    ▼
+Return JSON { answer, sources, conversationId }
+    │
+    ▼
+ChatInterface receives response
+    ├── 12. Add AI message to local state
+    ├── 13. If new conversation → update URL to /chat?id=XXX
+    ├── 14. Dispatch "conversation-updated" event → sidebar refreshes
+    └── 15. Set isLoading = false (hides TypingIndicator)
+```
+
+---
+
+## 4.2 Chat Page — `app/(dashboard)/chat/page.tsx`
+
+```typescript
+// app/(dashboard)/chat/page.tsx
+import { ChatInterface } from "@/components/chat/ChatInterface";
+import { Suspense } from "react";
+
+export default function ChatPage() {
+    return (
+        <Suspense fallback={<div className="flex-1 flex items-center justify-center">
+            <div className="w-8 h-8 border-4 border-indigo-200 border-t-indigo-600 rounded-full animate-spin" />
+        </div>}>
+            <ChatInterface />
+        </Suspense>
+    );
+}
+```
+
+**What it does:**
+- Wraps `<ChatInterface />` in `<Suspense>` because `ChatInterface` uses `useSearchParams()` which requires a Suspense boundary
+- Shows a loading spinner while the chat component loads
+- This is the `{children}` rendered inside the dashboard layout
+
+---
+
+## 4.3 ChatInterface — `components/chat/ChatInterface.tsx`
+
+This is the **central controller** for the entire chat experience. It manages state, API calls, conversation navigation, and coordinates all child components.
+
+```typescript
+// components/chat/ChatInterface.tsx
+"use client";
+
+import { useState, useCallback, useEffect } from "react";
+import { useSearchParams } from "next/navigation";
+import { GraduationCap, BookOpen, Brain, Target, Loader2 } from "lucide-react";
+import { MessageList } from "./MessageList";
+import { InputBox } from "./InputBox";
+import type { Message } from "@/types";
+
+const SUGGESTED_PROMPTS = [
+    { icon: BookOpen, text: "Explain the OSI model layers", color: "text-blue-600 bg-blue-50" },
+    { icon: Brain, text: "What is Dijkstra's algorithm?", color: "text-indigo-600 bg-indigo-50" },
+    { icon: Target, text: "Important topics in Data Structures", color: "text-emerald-600 bg-emerald-50" },
+];
+
+export function ChatInterface() {
+    const searchParams = useSearchParams();
+    const conversationId = searchParams.get("id");           // From URL: /chat?id=XXX
+
+    const [messages, setMessages] = useState<Message[]>([]);
+    const [isLoading, setIsLoading] = useState(false);       // True while waiting for AI response
+    const [isLoadingHistory, setIsLoadingHistory] = useState(false);  // True while loading past messages
+    const [currentConversationId, setCurrentConversationId] = useState<string | null>(conversationId);
+```
+
+### State Machine
+
+The component has 3 visual states:
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  STATE 1: isLoadingHistory === true                     │
+│                                                         │
+│  Shows: Centered spinner + "Loading conversation..."    │
+│  When:  User clicks an existing conversation in sidebar │
+│         Messages are being fetched from database        │
+└─────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────┐
+│  STATE 2: messages.length === 0 (Empty State)           │
+│                                                         │
+│  Shows: GraduationCap icon + "Start a Conversation"     │
+│         + 3 suggested prompt buttons                    │
+│         + InputBox at the bottom                        │
+│  When:  User clicks "New Chat" or visits /chat (no id)  │
+└─────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────┐
+│  STATE 3: messages.length > 0 (Active Chat)             │
+│                                                         │
+│  Shows: MessageList (scrollable message history)        │
+│         + TypingIndicator (if isLoading)                │
+│         + InputBox at the bottom                        │
+│  When:  After sending first message or loading history  │
+└─────────────────────────────────────────────────────────┘
+```
+
+### Loading Existing Conversations
+
+```typescript
+    // When the URL changes (user clicks a conversation in sidebar)
+    useEffect(() => {
+        setCurrentConversationId(conversationId);
+
+        if (!conversationId) {
+            setMessages([]);      // No id = new chat = empty state
+            return;
+        }
+
+        const loadMessages = async () => {
+            setIsLoadingHistory(true);
+            try {
+                const { createClient } = await import("@/lib/supabase/client");
+                const supabase = createClient();
+                const { data } = await supabase
+                    .from("messages")
+                    .select("*")
+                    .eq("conversation_id", conversationId)
+                    .order("created_at", { ascending: true });
+
+                if (data && data.length > 0) {
+                    setMessages(data.map((m) => ({
+                        id: m.id,
+                        conversation_id: m.conversation_id,
+                        role: m.role as "user" | "assistant",
+                        content: m.content,
+                        sources: m.sources,
+                        created_at: m.created_at,
+                    })));
+                } else {
+                    setMessages([]);
+                }
+            } catch {
+                setMessages([]);
+            }
+            setIsLoadingHistory(false);
+        };
+
+        loadMessages();
+    }, [conversationId]);
+```
+
+**Key details:**
+- Uses **dynamic import** (`await import("@/lib/supabase/client")`) to avoid importing Supabase SDK at module level
+- Queries `messages` table filtered by `conversation_id`, ordered by `created_at` ascending (oldest first)
+- If the conversation has no messages (shouldn't happen normally), shows empty state
+
+### Sending a Message
+
+```typescript
+    const sendMessage = useCallback(async (content: string) => {
+        // 1. Create optimistic user message with temporary ID
+        const userMessage: Message = {
+            id: `user-${Date.now()}`,
+            conversation_id: currentConversationId || "",
+            role: "user",
+            content,
+            created_at: new Date().toISOString(),
+        };
+
+        setMessages((prev) => [...prev, userMessage]);   // Show immediately
+        setIsLoading(true);                               // Show TypingIndicator
+
+        try {
+            // 2. POST to /api/chat
+            const res = await fetch("/api/chat", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    message: content,
+                    conversationId: currentConversationId,
+                }),
+            });
+
+            const data = await res.json();
+
+            if (!res.ok) {
+                throw new Error(data.error || "Failed to get response");
+            }
+
+            // 3. Create AI message from response
+            const aiMessage: Message = {
+                id: `ai-${Date.now()}`,
+                conversation_id: data.conversationId,
+                role: "assistant",
+                content: data.answer,
+                sources: data.sources,
+                created_at: new Date().toISOString(),
+            };
+
+            setMessages((prev) => [...prev, aiMessage]);
+
+            // 4. If this was a new conversation, update state and URL
+            if (!currentConversationId && data.conversationId) {
+                setCurrentConversationId(data.conversationId);
+                window.history.replaceState(null, "", `/chat?id=${data.conversationId}`);
+            }
+
+            // 5. Notify sidebar to refresh
+            window.dispatchEvent(new CustomEvent("conversation-updated"));
+
+        } catch (error) {
+            // 6. Show error as an AI message
+            const errorMessage: Message = {
+                id: `error-${Date.now()}`,
+                conversation_id: currentConversationId || "",
+                role: "assistant",
+                content: error instanceof Error && error.message.includes("Too many requests")
+                    ? "⏱️ You're sending messages too fast. Please wait a moment."
+                    : "I apologize, but I encountered an error. Please try again.",
+                created_at: new Date().toISOString(),
+            };
+            setMessages((prev) => [...prev, errorMessage]);
+        } finally {
+            setIsLoading(false);
+        }
+    }, [currentConversationId]);
+```
+
+**Critical design decisions:**
+
+1. **Optimistic UI**: The user message appears instantly in the chat, BEFORE the API call completes. This makes the app feel responsive.
+
+2. **URL management**: After the first message creates a new conversation, `window.history.replaceState()` updates the URL from `/chat` to `/chat?id=XXX` **without** triggering a re-render or navigation. This means:
+   - If the user refreshes the page, they'll load the same conversation
+   - The sidebar highlights the correct conversation
+
+3. **Event dispatch**: `window.dispatchEvent(new CustomEvent("conversation-updated"))` tells the `RecentChats` sidebar component to refetch conversations immediately, so the new chat appears in the list.
+
+4. **Error as message**: Errors are displayed as assistant messages in the chat, not as alerts or toasts. Rate limit errors get a special clock emoji message.
+
+### Regenerate Response
+
+```typescript
+    const handleRegenerate = useCallback(() => {
+        const lastUserIndex = [...messages].map(m => m.role).lastIndexOf("user");
+        if (lastUserIndex === -1) return;
+        const lastUserMsg = messages[lastUserIndex];
+        setMessages((prev) => prev.slice(0, lastUserIndex));  // Remove last user + AI messages
+        sendMessage(lastUserMsg.content);                      // Re-send the same question
+    }, [messages, sendMessage]);
+```
+
+**What it does:** Finds the last user message, removes it and the AI response from local state, then re-sends the same message through the full pipeline. This generates a fresh RAG search + new GPT completion.
+
+---
+
+## 4.4 InputBox — `components/chat/InputBox.tsx`
+
+```typescript
+// components/chat/InputBox.tsx
+"use client";
+
+import { useState, useRef, useEffect } from "react";
+import { Send } from "lucide-react";
+import { cn } from "@/lib/utils";
+
+interface InputBoxProps {
+    onSend: (message: string) => void;
+    disabled?: boolean;
+}
+
+export function InputBox({ onSend, disabled }: InputBoxProps) {
+    const [value, setValue] = useState("");
+    const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+    // Auto-resize textarea as user types
+    useEffect(() => {
+        if (textareaRef.current) {
+            textareaRef.current.style.height = "auto";
+            textareaRef.current.style.height =
+                Math.min(textareaRef.current.scrollHeight, 200) + "px";
+        }
+    }, [value]);
+
+    const handleSend = () => {
+        const trimmed = value.trim();
+        if (!trimmed || disabled) return;
+        onSend(trimmed);
+        setValue("");
+        if (textareaRef.current) {
+            textareaRef.current.style.height = "auto";
+        }
+    };
+
+    const handleKeyDown = (e: React.KeyboardEvent) => {
+        if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault();
+            handleSend();
+        }
+    };
+
+    return (
+        <div className="border-t border-gray-100 bg-white p-4">
+            <div className="max-w-[57.6rem] mx-auto">
+                <div className="relative flex items-end border-2 border-gray-200 rounded-3xl 
+                               bg-gray-50 focus-within:border-indigo-400 focus-within:bg-white 
+                               transition-all duration-200">
+                    <textarea
+                        ref={textareaRef}
+                        value={value}
+                        onChange={(e) => setValue(e.target.value)}
+                        onKeyDown={handleKeyDown}
+                        placeholder="Ask anything from your syllabus..."
+                        disabled={disabled}
+                        rows={1}
+                        className="flex-1 resize-none bg-transparent px-5 py-3.5 text-sm ..."
+                    />
+                    <button
+                        onClick={handleSend}
+                        disabled={!value.trim() || disabled}
+                        className={cn(
+                            "m-2 p-2 rounded-full transition-all duration-200 shrink-0",
+                            value.trim() && !disabled
+                                ? "bg-indigo-600 text-white hover:bg-indigo-700 shadow-sm"
+                                : "bg-gray-200 text-gray-400 cursor-not-allowed"
+                        )}
+                    >
+                        <Send className="w-4 h-4" />
+                    </button>
+                </div>
+                <p className="text-[11px] text-gray-400 text-center mt-2">
+                    KTU Exam Prep AI can make mistakes. Verify important information.
+                </p>
+            </div>
+        </div>
+    );
+}
+```
+
+**Features:**
+- **Auto-expanding textarea**: Starts at 1 row, grows up to 200px as user types multi-line content
+- **Enter to send**: Default Enter sends the message. Shift+Enter creates a new line.
+- **Smart send button**: Gray/disabled when empty, indigo when there's text, disabled during API call
+- **Disclaimer**: Shows "can make mistakes" warning like ChatGPT
+- **Max width**: Content is constrained to `57.6rem` (921px) and centered — matches MessageList width
+
+**Connected to:**
+- `components/chat/ChatInterface.tsx` → receives `onSend` and `disabled` props
+
+---
+
+## 4.5 MessageList — `components/chat/MessageList.tsx`
+
+```typescript
+// components/chat/MessageList.tsx
+"use client";
+
+import { useRef, useEffect } from "react";
+import { Message } from "./Message";
+import { TypingIndicator } from "./TypingIndicator";
+import type { Message as MessageType } from "@/types";
+
+interface MessageListProps {
+    messages: MessageType[];
+    isLoading: boolean;
+    onRegenerate?: () => void;
+}
+
+export function MessageList({ messages, isLoading, onRegenerate }: MessageListProps) {
+    const bottomRef = useRef<HTMLDivElement>(null);
+
+    // Auto-scroll to bottom when new messages arrive or loading state changes
+    useEffect(() => {
+        bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    }, [messages, isLoading]);
+
+    return (
+        <div className="flex-1 overflow-y-auto px-4 py-6">
+            <div className="max-w-[57.6rem] mx-auto space-y-6">
+                {messages.map((msg, i) => (
+                    <Message
+                        key={msg.id || i}
+                        message={msg}
+                        onRegenerate={
+                            i === messages.length - 1 && msg.role === "assistant"
+                                ? onRegenerate
+                                : undefined
+                        }
+                    />
+                ))}
+                {isLoading && <TypingIndicator />}
+                <div ref={bottomRef} />    {/* Invisible anchor for auto-scroll */}
+            </div>
+        </div>
+    );
+}
+```
+
+**Key details:**
+- **Auto-scroll**: A zero-size `<div ref={bottomRef} />` at the bottom acts as the scroll target. When messages change or loading starts, `scrollIntoView({ behavior: "smooth" })` smoothly scrolls to it.
+- **Regenerate button**: Only the **last** assistant message receives the `onRegenerate` handler. Earlier messages don't show a regenerate button.
+- **TypingIndicator**: Shown at the bottom of the list when `isLoading` is true, making it appear as if the AI is typing.
+
+---
+
+## 4.6 Message — `components/chat/Message.tsx`
+
+Each individual message bubble with markdown rendering, source citations, copy, and regenerate actions.
+
+```typescript
+// components/chat/Message.tsx
+"use client";
+
+import { useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import { Copy, Check, RefreshCw } from "lucide-react";
+import type { Message as MessageType } from "@/types";
+
+export function Message({ message, onRegenerate }: MessageProps) {
+    const [copied, setCopied] = useState(false);
+    const isUser = message.role === "user";
+
+    const handleCopy = async () => {
+        await navigator.clipboard.writeText(message.content);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+    };
+
+    return (
+        <div className={cn("flex gap-3 animate-slide-up-fade",
+            isUser ? "justify-end" : "justify-start")}>
+
+            <div className={cn("relative group", isUser ? "max-w-[70%]" : "max-w-full")}>
+                <div className={cn("px-4 py-3 text-sm leading-relaxed",
+                    isUser
+                        ? "bg-indigo-600 text-white rounded-[18px_18px_4px_18px]"
+                        : "bg-gray-100 text-gray-900 rounded-[18px_18px_18px_4px]"
+                )}>
+                    {isUser ? (
+                        <p className="whitespace-pre-wrap">{message.content}</p>
+                    ) : (
+                        <div className="prose prose-sm max-w-none ...">
+                            <ReactMarkdown remarkPlugins={[remarkGfm]}
+                                components={{
+                                    pre: ({ children }) => (
+                                        <pre className="... bg-gray-900 text-gray-100 ...">{children}</pre>
+                                    ),
+                                    code: ({ className, children, ...props }) => {
+                                        const isBlock = className?.includes("language-");
+                                        if (isBlock) return <code className={className} {...props}>{children}</code>;
+                                        return <code className="bg-indigo-50 text-indigo-700 ..." {...props}>{children}</code>;
+                                    },
+                                }}
+                            >
+                                {message.content}
+                            </ReactMarkdown>
+                        </div>
+                    )}
+                </div>
+
+                {/* Source citations — shown only on AI messages with sources */}
+                {!isUser && message.sources && message.sources.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 mt-2">
+                        {message.sources.map((source, i) => (
+                            <span key={i} className="... text-[11px] text-gray-500">
+                                📄 {source.course_code} {source.module}
+                            </span>
+                        ))}
+                    </div>
+                )}
+
+                {/* Action buttons — copy + regenerate (on hover) */}
+                {!isUser && (
+                    <div className="flex items-center gap-1 mt-1.5 opacity-0 group-hover:opacity-100 ...">
+                        <button onClick={handleCopy}>
+                            {copied ? <Check className="text-green-500" /> : <Copy className="text-gray-400" />}
+                        </button>
+                        {onRegenerate && (
+                            <button onClick={onRegenerate}>
+                                <RefreshCw className="text-gray-400" />
+                            </button>
+                        )}
+                    </div>
+                )}
+            </div>
+
+            {/* User avatar */}
+            {isUser && (
+                <div className="w-8 h-8 bg-indigo-100 text-indigo-700 rounded-full ...">U</div>
+            )}
+        </div>
+    );
+}
+```
+
+**Visual design:**
+- **User messages**: Right-aligned, indigo background, white text, chat-bubble rounded corners (`18px_18px_4px_18px` — the bottom-right corner is sharp)
+- **AI messages**: Left-aligned, gray background, dark text, opposite corner pattern
+- **User avatar**: Dark "U" in a circle, shown to the right of user messages
+
+**Markdown rendering** (AI messages only):
+- Uses `react-markdown` with `remark-gfm` (GitHub-flavored markdown: tables, strikethrough, etc.)
+- Custom `<pre>` component: dark background code blocks
+- Custom `<code>` component: distinguishes inline code (indigo) from code blocks
+
+**Source citations**:
+- Displayed as small gray pills below the AI response
+- Format: `📄 PBCST304 Module 2`
+- Data comes from the `sources` JSONB array stored in the `messages` table
+
+**Actions** (shown on hover via `group-hover:opacity-100`):
+- **Copy**: Copies raw markdown to clipboard. Shows a green check for 2 seconds as feedback.
+- **Regenerate**: Only on the last AI message. Triggers `handleRegenerate()` in `ChatInterface`.
+
+---
+
+## 4.7 TypingIndicator — `components/chat/TypingIndicator.tsx`
+
+```typescript
+// components/chat/TypingIndicator.tsx
+"use client";
+
+export function TypingIndicator() {
+    return (
+        <div className="flex items-start gap-3 animate-fade-in">
+            <div className="w-8 h-8 bg-gray-100 rounded-full flex items-center justify-center shrink-0">
+                <span className="text-sm">🤖</span>
+            </div>
+            <div className="bg-gray-100 rounded-2xl rounded-bl px-4 py-3">
+                <div className="flex items-center gap-1.5">
+                    <div className="w-2 h-2 bg-gray-400 rounded-full typing-dot" />
+                    <div className="w-2 h-2 bg-gray-400 rounded-full typing-dot" />
+                    <div className="w-2 h-2 bg-gray-400 rounded-full typing-dot" />
+                </div>
+            </div>
+        </div>
+    );
+}
+```
+
+**What it does:**
+- Shows an animated "..." bubble with a 🤖 avatar while the AI is generating a response
+- The `typing-dot` CSS class creates a staggered bounce animation (defined in `globals.css`)
+- Appears between the last message and the `bottomRef` scroll anchor
+
+---
+
+## 4.8 Chat API Route — `app/api/chat/route.ts`
+
+This is the server-side handler that orchestrates the entire chat flow.
+
+```typescript
+// app/api/chat/route.ts
+import { NextRequest, NextResponse } from "next/server";
+import { createClient } from "@/lib/supabase/server";
+import { checkRateLimit } from "@/lib/rate-limit";
+import { generateAnswer } from "@/lib/rag/generate";
+
+const CHAT_RATE_LIMIT = { maxRequests: 20, windowSeconds: 60 };
+
+export async function POST(req: NextRequest) {
+    try {
+        // ── STEP 1: Authentication ──
+        const supabase = await createClient();
+        const { data: { user }, error: authError } = await supabase.auth.getUser();
+
+        if (authError || !user) {
+            return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+        }
+
+        // ── STEP 2: Rate Limiting ──
+        const rateResult = await checkRateLimit(`chat:${user.id}`, CHAT_RATE_LIMIT);
+        if (!rateResult.allowed) {
+            return NextResponse.json(
+                { error: "Too many requests. Please wait before sending another message." },
+                { status: 429, headers: {
+                    "X-RateLimit-Remaining": String(rateResult.remaining),
+                    "X-RateLimit-Reset": String(rateResult.resetAt),
+                }}
+            );
+        }
+
+        // ── STEP 3: Input Validation ──
+        const body = await req.json();
+        const message: string = body.message;
+        const conversationId: string | undefined = body.conversationId;
+        const courseId: string | undefined = body.courseId;
+
+        if (!message || typeof message !== "string" || message.trim().length === 0) {
+            return NextResponse.json({ error: "Message is required." }, { status: 400 });
+        }
+        if (message.length > 5000) {
+            return NextResponse.json({ error: "Message too long (max 5000 chars)." }, { status: 400 });
+        }
+        if (courseId && !/^[0-9a-f-]{36}$/.test(courseId)) {
+            return NextResponse.json({ error: "Invalid courseId." }, { status: 400 });
+        }
+        if (conversationId && !/^[0-9a-f-]{36}$/.test(conversationId)) {
+            return NextResponse.json({ error: "Invalid conversationId." }, { status: 400 });
+        }
+
+        // ── STEP 4: Conversation Management ──
+        let activeConversationId = conversationId;
+
+        if (activeConversationId) {
+            // Verify the conversation belongs to this user
+            const { data: conv, error } = await supabase
+                .from("conversations")
+                .select("id")
+                .eq("id", activeConversationId)
+                .eq("user_id", user.id)
+                .single();
+
+            if (error || !conv) {
+                return NextResponse.json({ error: "Conversation not found." }, { status: 404 });
+            }
+        } else {
+            // Create a new conversation
+            const { data: newConv, error: convError } = await supabase
+                .from("conversations")
+                .insert({
+                    user_id: user.id,
+                    title: message.slice(0, 50),     // First 50 chars become the title
+                    course_id: courseId ?? null,
+                })
+                .select("id")
+                .single();
+
+            if (convError || !newConv) {
+                return NextResponse.json({ error: "Failed to create conversation." }, { status: 500 });
+            }
+            activeConversationId = newConv.id;
+        }
+
+        // ── STEP 5: Save User Message ──
+        await supabase.from("messages").insert({
+            conversation_id: activeConversationId,
+            role: "user",
+            content: message.trim(),
+        });
+
+        // ── STEP 6: Build Conversation History ──
+        const { data: historyRows } = await supabase
+            .from("messages")
+            .select("role, content")
+            .eq("conversation_id", activeConversationId)
+            .order("created_at", { ascending: true })
+            .limit(10);
+
+        const history = (historyRows ?? []).map((row) => ({
+            role: row.role as "user" | "assistant",
+            content: row.content,
+        }));
+
+        // ── STEP 7: RAG Pipeline (search + generate) ──
+        const { answer, sources } = await generateAnswer(message, history, courseId);
+
+        // ── STEP 8: Save AI Response ──
+        await supabase.from("messages").insert({
+            conversation_id: activeConversationId,
+            role: "assistant",
+            content: answer,
+            sources: sources,
+        });
+
+        // ── STEP 9: Update Conversation Timestamp ──
+        await supabase
+            .from("conversations")
+            .update({ updated_at: new Date().toISOString() })
+            .eq("id", activeConversationId);
+
+        // ── STEP 10: Return Response ──
+        return NextResponse.json({
+            answer,
+            sources,
+            conversationId: activeConversationId,
+        });
+
+    } catch (err: unknown) {
+        console.error("[/api/chat] ERROR:", err instanceof Error ? err.message : "Unknown error");
+        return NextResponse.json(
+            { error: "Something went wrong. Please try again." },
+            { status: 500 }
+        );
+    }
+}
+```
+
+**Input validation details:**
+
+| Check | What it prevents |
+|-------|------------------|
+| `typeof message !== "string"` | Non-string payloads (arrays, objects, numbers) |
+| `message.trim().length === 0` | Empty or whitespace-only messages |
+| `message.length > 5000` | Excessively long messages (token limit protection) |
+| `/^[0-9a-f-]{36}$/.test(courseId)` | SQL injection via courseId — must be valid UUID format |
+| `/^[0-9a-f-]{36}$/.test(conversationId)` | SQL injection via conversationId |
+| `.eq("user_id", user.id)` on conversations | Users can't access other users' conversations |
+
+---
+
+## 4.9 RAG Pipeline
+
+### 4.9.1 What is RAG?
+
+RAG (Retrieval-Augmented Generation) is a technique where:
+1. **Retrieve** relevant documents from a knowledge base using similarity search
+2. **Augment** the AI prompt with those documents as context
+3. **Generate** an answer using the LLM with the augmented context
+
+This prevents the AI from hallucinating and grounds answers in actual KTU syllabus content.
+
+### 4.9.2 Semantic Search — `lib/rag/search.ts`
+
+```typescript
+// lib/rag/search.ts
+import OpenAI from "openai";
+import { createServiceClient } from "@/lib/supabase/server";
+
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+export interface SyllabusMatch {
+    id: string;
+    content: string;
+    similarity: number;
+    metadata: {
+        module_number?: number;
+        topic?: string;
+        course_code?: string;
+        course_name?: string;
+    };
+}
+
+export async function searchSyllabus(
+    query: string,
+    courseId?: string,
+    matchCount: number = 5,
+    matchThreshold: number = 0.5
+): Promise<SyllabusMatch[]> {
+    // ── STEP A: Embed the user's question ──
+    const embeddingResponse = await openai.embeddings.create({
+        model: "text-embedding-3-small",
+        input: query.trim(),
+    });
+
+    const queryEmbedding = embeddingResponse.data[0].embedding;   // 1536 floats
+
+    // Convert to pgvector string format: "[0.123,0.456,...]"
+    const embeddingStr = `[${queryEmbedding.join(",")}]`;
+
+    // ── STEP B: Call match_syllabus() RPC via PostgREST ──
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+
+    const response = await fetch(`${supabaseUrl}/rest/v1/rpc/match_syllabus`, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+            "apikey": serviceKey,
+            "Authorization": `Bearer ${serviceKey}`,
+        },
+        body: JSON.stringify({
+            query_embedding: embeddingStr,
+            match_threshold: matchThreshold,
+            match_count: matchCount,
+            filter_course_id: courseId ?? null,
+        }),
+    });
+
+    if (!response.ok) {
+        const errText = await response.text();
+        console.error("[searchSyllabus] RPC error:", response.status, errText);
+        return [];
+    }
+
+    const data = await response.json();
+    return (data as SyllabusMatch[]) ?? [];
+}
+```
+
+**Step-by-step flow:**
+
+```
+User question: "What is polymorphism in Java?"
+    │
+    ▼
+Step A: OpenAI Embedding
+    Input: "What is polymorphism in Java?"
+    Model: text-embedding-3-small
+    Output: [0.0123, -0.0456, 0.0789, ... ] (1536 floats)
+    │
+    ▼
+Step B: pgvector Similarity Search
+    Call: POST /rest/v1/rpc/match_syllabus
+    Body: {
+        query_embedding: "[0.0123,-0.0456,0.0789,...]",
+        match_threshold: 0.5,
+        match_count: 5,
+        filter_course_id: null
+    }
+    │
+    ▼
+PostgreSQL executes:
+    SELECT id, content, 1 - (embedding <=> query_embedding) AS similarity, metadata
+    FROM syllabus_embeddings
+    WHERE 1 - (embedding <=> query_embedding) > 0.5
+    ORDER BY embedding <=> query_embedding
+    LIMIT 5
+    │
+    ▼
+Returns: [
+    {
+        id: "abc-123",
+        content: "Polymorphism means 'many forms'. In Java, polymorphism allows...",
+        similarity: 0.89,
+        metadata: { module_number: 2, topic: "Polymorphism", course_code: "PBCST304", course_name: "OOPs" }
+    },
+    // ... up to 5 results
+]
+```
+
+**Why direct fetch instead of Supabase SDK?**
+The Supabase JS SDK doesn't handle pgvector's `VECTOR(1536)` type well — it can cause type serialization issues. Using a direct HTTP fetch to PostgREST bypasses this entirely and gives reliable results. The **service role key** is used to bypass RLS since `match_syllabus()` needs to access all embeddings, not just the current user's.
+
+### 4.9.3 Context Formatter — `formatContext()`
+
+```typescript
+export function formatContext(matches: SyllabusMatch[]): string {
+    if (matches.length === 0) return "";
+
+    return matches
+        .map((m, i) => {
+            const meta = m.metadata;
+            const header = [
+                meta.course_name && `Course: ${meta.course_name}`,
+                meta.module_number && `Module ${meta.module_number}`,
+                meta.topic && `Topic: ${meta.topic}`,
+            ]
+                .filter(Boolean)
+                .join(" | ");
+            return `[Reference ${i + 1}] ${header}\n${m.content}`;
+        })
+        .join("\n\n---\n\n");
+}
+```
+
+**Example output:**
+
+```
+[Reference 1] Course: OOPs | Module 2 | Topic: Polymorphism
+Polymorphism means 'many forms'. In Java, polymorphism allows objects to take on
+multiple forms. There are two types: compile-time (method overloading) and
+runtime (method overriding)...
+
+---
+
+[Reference 2] Course: OOPs | Module 2 | Topic: Method Overriding
+Method overriding occurs when a subclass provides a specific implementation of a
+method that is already provided by its parent class...
+```
+
+---
+
+### 4.9.4 Answer Generation — `lib/rag/generate.ts`
+
+```typescript
+// lib/rag/generate.ts
+import OpenAI from "openai";
+import { searchSyllabus, formatContext } from "./search";
+
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+function buildSystemPrompt(syllabusContext: string): string {
+    const hasContext = syllabusContext.trim().length > 0;
+    const contextBlock = hasContext
+        ? `\n\nRELEVANT SYLLABUS CONTENT:\n${syllabusContext}`
+        : "\n\n(No specific syllabus content matched for this query.)";
+
+    return `You are an AI study assistant for APJ Abdul Kalam Technological University (KTU) 
+students in Kerala, India. The subject is Object Oriented Programming using Java (S3, PBCST304).
+
+STRICT RULES:
+1. Answer ONLY based on the KTU syllabus content provided below. Do not use outside knowledge.
+2. If the question is outside the provided syllabus, say: "This topic doesn't appear to be 
+   in the OOPs syllabus. Please check if you've selected the right subject."
+3. Structure answers to match KTU exam answer patterns:
+   - Part A (2 marks): 2-4 sentence direct definition/answer.
+   - Part B (9 marks): Detailed explanation with subpoints, syntax, and a code example.
+   - Part C (18 marks): Comprehensive answer with code, comparison tables, all aspects covered.
+4. Always mention which MODULE the topic belongs to.
+5. For definitions, start with a clean one-line definition, then expand.
+6. For comparisons, always use a markdown table.
+7. If asked for "important questions" or "likely exam topics", list key topics with frequency.
+8. Never make up facts, code, or definitions not in the syllabus content.
+${contextBlock}`;
+}
+
+export async function generateAnswer(
+    message: string,
+    history: ChatMessage[],
+    courseId?: string
+): Promise<GenerateAnswerResult> {
+    // ── STEP 1: Search syllabus for relevant content ──
+    const matches = await searchSyllabus(message, courseId);
+
+    // ── STEP 2: Format matches into context string ──
+    const syllabusContext = formatContext(matches);
+
+    // ── STEP 3: Build the system prompt ──
+    const systemPrompt = buildSystemPrompt(syllabusContext);
+
+    // ── STEP 4: Build the full message array for GPT ──
+    const recentHistory = history.slice(-10);  // Last 10 messages for context
+
+    const conversationMessages: OpenAI.Chat.ChatCompletionMessageParam[] = [
+        { role: "system", content: systemPrompt },
+        ...recentHistory.map((msg) => ({
+            role: msg.role as "user" | "assistant",
+            content: msg.content,
+        })),
+        { role: "user", content: message },
+    ];
+
+    // ── STEP 5: Call GPT-4o-mini ──
+    const completion = await openai.chat.completions.create({
+        model: "gpt-4o-mini",
+        messages: conversationMessages,
+        max_tokens: 1500,
+        temperature: 0.3,       // Low temperature = more deterministic, factual answers
+    });
+
+    const answer = completion.choices[0]?.message?.content
+        ?? "Sorry, I couldn't generate a response. Please try again.";
+
+    // ── STEP 6: Format source citations ──
+    const sources = matches.map((m) => ({
+        course_code: m.metadata.course_code ?? m.metadata.course_name ?? "OOPs",
+        module: m.metadata.module_number != null ? `Module ${m.metadata.module_number}` : "General",
+        topic: m.metadata.topic ?? "General",
+        similarity: Math.round(m.similarity * 100) / 100,
+    }));
+
+    return { answer, sources };
+}
+```
+
+**The message array sent to GPT-4o-mini looks like:**
+
+```json
+[
+    {
+        "role": "system",
+        "content": "You are an AI study assistant for KTU...\n\nRELEVANT SYLLABUS CONTENT:\n[Reference 1] Course: OOPs | Module 2 | Topic: Polymorphism\nPolymorphism means..."
+    },
+    { "role": "user", "content": "What are the types of polymorphism?" },
+    { "role": "assistant", "content": "In Java, there are two types of polymorphism..." },
+    { "role": "user", "content": "Can you give a code example for method overriding?" }
+]
+```
+
+**GPT parameters:**
+
+| Parameter | Value | Why |
+|-----------|-------|-----|
+| `model` | `gpt-4o-mini` | Cost-effective, fast, good quality for educational content |
+| `max_tokens` | `1500` | Enough for detailed Part B/C exam answers, prevents runaway responses |
+| `temperature` | `0.3` | Low temperature = more factual, less creative. Ideal for exam answers where accuracy matters |
+
+### 4.9.5 Complete RAG Data Flow Diagram
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                        RAG PIPELINE                                     │
+│                                                                         │
+│  User Question: "Explain method overriding in Java"                     │
+│                                                                         │
+│  ┌─────────────────────────────────────────────────────────────┐       │
+│  │  STEP 1: EMBED (lib/rag/search.ts)                         │       │
+│  │                                                             │       │
+│  │  OpenAI text-embedding-3-small                              │       │
+│  │  "Explain method overriding in Java"                        │       │
+│  │      → [0.0123, -0.0456, 0.0789, ... 1536 floats]         │       │
+│  └──────────────────────────┬──────────────────────────────────┘       │
+│                             │                                           │
+│                             ▼                                           │
+│  ┌─────────────────────────────────────────────────────────────┐       │
+│  │  STEP 2: SEARCH (PostgreSQL match_syllabus RPC)             │       │
+│  │                                                             │       │
+│  │  Cosine similarity: 1 - (embedding <=> query_embedding)     │       │
+│  │  Filter: similarity > 0.5                                   │       │
+│  │  Limit: 5 results                                           │       │
+│  │                                                             │       │
+│  │  Results:                                                   │       │
+│  │  ┌──────────────────────────────────────────────────┐       │       │
+│  │  │ 1. Module 2 - Polymorphism (similarity: 0.89)    │       │       │
+│  │  │ 2. Module 2 - Method Overriding (similarity: 0.85)│      │       │
+│  │  │ 3. Module 3 - Abstract Classes (similarity: 0.72) │      │       │
+│  │  └──────────────────────────────────────────────────┘       │       │
+│  └──────────────────────────┬──────────────────────────────────┘       │
+│                             │                                           │
+│                             ▼                                           │
+│  ┌─────────────────────────────────────────────────────────────┐       │
+│  │  STEP 3: FORMAT CONTEXT (formatContext)                     │       │
+│  │                                                             │       │
+│  │  [Reference 1] Course: OOPs | Module 2 | Topic: Polymorphism│      │
+│  │  Polymorphism means 'many forms'...                         │       │
+│  │  ---                                                        │       │
+│  │  [Reference 2] Course: OOPs | Module 2 | Topic: Overriding │       │
+│  │  Method overriding occurs when a subclass...                │       │
+│  └──────────────────────────┬──────────────────────────────────┘       │
+│                             │                                           │
+│                             ▼                                           │
+│  ┌─────────────────────────────────────────────────────────────┐       │
+│  │  STEP 4: BUILD PROMPT (buildSystemPrompt)                   │       │
+│  │                                                             │       │
+│  │  System: "You are an AI study assistant for KTU..."         │       │
+│  │        + STRICT RULES (8 rules)                             │       │
+│  │        + RELEVANT SYLLABUS CONTENT (formatted context)      │       │
+│  │                                                             │       │
+│  │  History: last 10 messages from conversation                │       │
+│  │                                                             │       │
+│  │  User: "Explain method overriding in Java"                  │       │
+│  └──────────────────────────┬──────────────────────────────────┘       │
+│                             │                                           │
+│                             ▼                                           │
+│  ┌─────────────────────────────────────────────────────────────┐       │
+│  │  STEP 5: GENERATE (GPT-4o-mini)                             │       │
+│  │                                                             │       │
+│  │  model: gpt-4o-mini                                         │       │
+│  │  temperature: 0.3 (factual)                                 │       │
+│  │  max_tokens: 1500                                           │       │
+│  │                                                             │       │
+│  │  Output: "**Method Overriding** (Module 2)                  │       │
+│  │          Method overriding is a feature that allows a       │       │
+│  │          subclass to provide a specific implementation..."   │       │
+│  └──────────────────────────┬──────────────────────────────────┘       │
+│                             │                                           │
+│                             ▼                                           │
+│  ┌─────────────────────────────────────────────────────────────┐       │
+│  │  STEP 6: RETURN                                             │       │
+│  │                                                             │       │
+│  │  {                                                          │       │
+│  │    answer: "**Method Overriding** (Module 2)...",           │       │
+│  │    sources: [                                               │       │
+│  │      { course_code: "PBCST304", module: "Module 2",        │       │
+│  │        topic: "Polymorphism", similarity: 0.89 },           │       │
+│  │      { course_code: "PBCST304", module: "Module 2",        │       │
+│  │        topic: "Method Overriding", similarity: 0.85 }       │       │
+│  │    ]                                                        │       │
+│  │  }                                                          │       │
+│  └─────────────────────────────────────────────────────────────┘       │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+*End of Part 4. Part 5 will cover all remaining API Routes (profile, courses, patterns, study-time, search), Types, and Utilities.*
