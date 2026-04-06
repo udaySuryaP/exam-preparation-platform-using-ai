@@ -4426,4 +4426,720 @@ This is the most-used utility in the codebase — every component with condition
 
 ---
 
-*End of Part 5. Part 6 will cover Data Seeding Scripts, the Complete File Connection Map, and the full User Perspective Flow.*
+*End of Part 5.*
+
+---
+
+# Part 6: Data Seeding, Rate Limiter, File Connections & User Flow
+
+## 6.1 Rate Limiter — `lib/rate-limit.ts`
+
+Every API route uses this module for rate limiting via Upstash Redis.
+
+```typescript
+// lib/rate-limit.ts
+import { Ratelimit } from "@upstash/ratelimit";
+import { Redis } from "@upstash/redis";
+
+export interface RateLimitConfig {
+    maxRequests: number;
+    windowSeconds: number;
+}
+
+export interface RateLimitResult {
+    allowed: boolean;
+    remaining: number;
+    resetAt: number;
+}
+
+// Lazily create Redis client — missing env vars in dev don't crash at import time
+let redis: Redis | null = null;
+function getRedis(): Redis | null {
+    if (!process.env.UPSTASH_REDIS_REST_URL || !process.env.UPSTASH_REDIS_REST_TOKEN) {
+        return null;
+    }
+    if (!redis) {
+        redis = new Redis({
+            url: process.env.UPSTASH_REDIS_REST_URL,
+            token: process.env.UPSTASH_REDIS_REST_TOKEN,
+        });
+    }
+    return redis;
+}
+
+// Cache limiters by config to avoid recreating on every request
+const limiterCache = new Map<string, Ratelimit>();
+
+function getLimiter(config: RateLimitConfig): Ratelimit | null {
+    const r = getRedis();
+    if (!r) return null;
+
+    const cacheKey = `${config.maxRequests}:${config.windowSeconds}`;
+    if (!limiterCache.has(cacheKey)) {
+        limiterCache.set(cacheKey, new Ratelimit({
+            redis: r,
+            limiter: Ratelimit.slidingWindow(config.maxRequests, `${config.windowSeconds} s`),
+            analytics: false,
+        }));
+    }
+    return limiterCache.get(cacheKey)!;
+}
+
+export async function checkRateLimit(key: string, config: RateLimitConfig): Promise<RateLimitResult> {
+    const limiter = getLimiter(config);
+
+    // Graceful degradation: if Redis not configured, allow all requests
+    if (!limiter) {
+        console.warn("[RateLimit] Upstash Redis not configured — rate limiting is disabled.");
+        return { allowed: true, remaining: config.maxRequests, resetAt: Date.now() + config.windowSeconds * 1000 };
+    }
+
+    try {
+        const result = await limiter.limit(key);
+        return { allowed: result.success, remaining: result.remaining, resetAt: result.reset };
+    } catch (err) {
+        // If Upstash is unreachable, degrade gracefully
+        console.warn("[RateLimit] Upstash error, allowing request:", err instanceof Error ? err.message : err);
+        return { allowed: true, remaining: config.maxRequests, resetAt: Date.now() + config.windowSeconds * 1000 };
+    }
+}
+```
+
+**Key architectural patterns:**
+
+1. **Lazy initialization** — Redis client is only created when the first rate limit check happens, not at module import. This prevents crashes during local development when env vars are missing.
+
+2. **Limiter cache** — `Map<string, Ratelimit>` ensures limiters with the same config (`20:60`, `30:60`, etc.) are created only once and reused. This is critical in serverless environments where each cold start would otherwise create new limiter instances.
+
+3. **Sliding window** — `Ratelimit.slidingWindow(20, "60 s")` uses a sliding window algorithm (not fixed windows). This prevents the "burst at boundary" problem where a user could send 20 requests at 0:59 and 20 more at 1:01 — effectively 40 in 2 seconds.
+
+4. **Graceful degradation** — Two levels of fallback:
+   - No env vars → allow all (local dev without Redis)
+   - Redis unreachable → allow all (prevents downtime from Redis outages)
+
+**Connected to:** Every API route (`/api/chat`, `/api/profile`, `/api/courses`, `/api/patterns`, `/api/study-time`, `/api/search`)
+
+---
+
+## 6.2 Data Seeding Script — `scripts/seed-syllabus.ts`
+
+This is a standalone TypeScript script that populates the database with syllabus content for the RAG pipeline.
+
+### Architecture
+
+```
+scripts/seed-syllabus.ts
+    │
+    ├── SYLLABUS_DATA constant (hardcoded)
+    │   ├── Course: PBCST304 (Object Oriented Programming)
+    │   ├── 4 Modules × ~6-8 topics each = ~26 topic chunks
+    │   └── Each topic: 200-500 word description of the syllabus content
+    │
+    ├── buildChunks() → flattens modules/topics into embeddable chunks
+    │
+    ├── seedCourseAndModules() → upserts course + modules into DB
+    │
+    └── embedAndInsert() → embeds all chunks via OpenAI, inserts into syllabus_embeddings
+```
+
+### Key Functions
+
+```typescript
+// 1. Build embeddable chunks from nested syllabus structure
+function buildChunks(courses: CourseEntry[]): Chunk[] {
+    const chunks: Chunk[] = [];
+    for (const course of courses) {
+        for (const module of course.modules) {
+            for (const topic of module.topics) {
+                chunks.push({
+                    content: topic.description,       // The text to embed
+                    metadata: {                       // Stored alongside for context
+                        course_id: course.course_id,
+                        course_code: course.course_code,
+                        course_name: course.course_name,
+                        semester: course.semester,
+                        module_number: module.module_number,
+                        module_title: module.title,
+                        topic: topic.name,
+                    },
+                });
+            }
+        }
+    }
+    return chunks;
+}
+
+// 2. Embed chunks in batches of 10, insert into database
+async function embedAndInsert(chunks: Chunk[]): Promise<void> {
+    const BATCH_SIZE = 10;
+    let inserted = 0;
+
+    for (let i = 0; i < chunks.length; i += BATCH_SIZE) {
+        const batch = chunks.slice(i, i + BATCH_SIZE);
+
+        // Batch embed all texts in one API call
+        const embeddingResponse = await openai.embeddings.create({
+            model: "text-embedding-3-small",
+            input: batch.map((c) => c.content),
+        });
+
+        // Build rows for Supabase insert
+        const rows = batch.map((chunk, idx) => ({
+            course_id: chunk.metadata.course_id,
+            content: chunk.content,
+            embedding: embeddingResponse.data[idx].embedding,  // 1536 floats
+            metadata: chunk.metadata,
+        }));
+
+        // Insert into syllabus_embeddings table
+        const { error } = await supabase.from("syllabus_embeddings").insert(rows);
+
+        if (error) console.error(`[FAILED] Batch ${Math.floor(i / BATCH_SIZE) + 1}`);
+        else {
+            inserted += batch.length;
+            console.log(`[OK] Batch ${Math.floor(i / BATCH_SIZE) + 1} — ${inserted}/${chunks.length}`);
+        }
+
+        // 500ms delay between batches to avoid OpenAI rate limits
+        if (i + BATCH_SIZE < chunks.length) await new Promise((r) => setTimeout(r, 500));
+    }
+}
+
+// 3. Main entry point
+async function main() {
+    // Validate environment variables
+    // Upsert course into courses table
+    // Upsert modules into modules table
+    // Delete existing embeddings for this course (idempotent re-runs)
+    // Build chunks → embed → insert
+}
+```
+
+### Running the Script
+
+```bash
+npx tsx scripts/seed-syllabus.ts
+```
+
+**Output:**
+```
+=== KTU OOPs Syllabus Seeder ===
+
+Upserting course and modules...
+  Module 1: Introduction to Java and OOP Concepts
+  Module 2: Polymorphism and Inheritance
+  Module 3: Packages, Interfaces, Exception Handling, and Design Patterns
+  Module 4: SOLID Principles, Swings, Event Handling, and JDBC
+
+Clearing existing embeddings for this course...
+
+Seeding 26 topic chunks...
+
+  [OK] Batch 1 — 10/26 done
+  [OK] Batch 2 — 20/26 done
+  [OK] Batch 3 — 26/26 done
+
+Done. 26 chunks inserted.
+```
+
+**What gets created in the database:**
+
+| Table | Rows Created |
+|-------|-------------|
+| `courses` | 1 row (PBCST304 — Object Oriented Programming) |
+| `modules` | 4 rows (one per module) |
+| `syllabus_embeddings` | 26 rows (one per topic, each with a 1536-dim vector) |
+
+**Idempotent**: Running the script again deletes existing embeddings first (`DELETE FROM syllabus_embeddings WHERE course_id = '...'`) and re-inserts, so it's safe to re-run.
+
+**Connected to:**
+- `supabase/schema.sql` → `courses`, `modules`, `syllabus_embeddings` tables
+- `lib/rag/search.ts` → queries these embeddings during chat
+- `.env.local` → reads `OPENAI_API_KEY`, `NEXT_PUBLIC_SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`
+
+---
+
+## 6.3 Complete File Connection Map
+
+This map shows how every file in the project connects to every other file. It is organized by layer.
+
+### Layer 1: Configuration & Infrastructure
+
+```
+next.config.ts
+  └── Defines: CSP headers, security headers
+  └── Used by: Next.js build system
+
+.env.local (not in git)
+  └── Contains: NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_ANON_KEY,
+  │             SUPABASE_SERVICE_ROLE_KEY, OPENAI_API_KEY,
+  │             UPSTASH_REDIS_REST_URL, UPSTASH_REDIS_REST_TOKEN
+  └── Read by: lib/supabase/server.ts, lib/supabase/client.ts,
+               lib/rag/search.ts, lib/rag/generate.ts, lib/rate-limit.ts,
+               scripts/seed-syllabus.ts
+
+tsconfig.json
+  └── Defines: "@/*" path alias → "./*"
+  └── Used by: All import statements project-wide
+```
+
+### Layer 2: Supabase Clients & Middleware
+
+```
+lib/supabase/client.ts
+  └── Exports: createClient() — browser Supabase client
+  └── Used by: components/sidebar/RecentChats.tsx
+  │            components/sidebar/UserProfile.tsx
+  │            components/chat/ChatInterface.tsx
+
+lib/supabase/server.ts
+  └── Exports: createClient() — server Supabase client (cookies-based)
+  │            createServiceClient() — admin/service role client
+  └── Used by: app/api/chat/route.ts, app/api/profile/route.ts,
+  │            app/api/courses/route.ts, app/api/patterns/route.ts,
+  │            app/api/study-time/route.ts, app/api/search/route.ts,
+  │            lib/supabase/middleware.ts
+
+lib/supabase/middleware.ts
+  └── Exports: updateSession() — enforces auth & onboarding
+  └── Used by: middleware.ts (root)
+
+middleware.ts
+  └── Calls: updateSession() from lib/supabase/middleware.ts
+  └── Matches: All routes except static assets, _next, favicon
+```
+
+### Layer 3: Shared Utilities
+
+```
+lib/utils.ts
+  └── Exports: cn(), getInitials(), truncate(), formatDate()
+  └── Used by: components/sidebar/NavigationLinks.tsx,
+  │            components/sidebar/ChatItem.tsx,
+  │            components/chat/Message.tsx,
+  │            components/chat/InputBox.tsx,
+  │            (and most UI components)
+
+lib/rate-limit.ts
+  └── Exports: checkRateLimit()
+  └── Used by: ALL 6 API routes
+
+types/index.ts
+  └── Exports: Message, Conversation, UserProfile, Course,
+  │            DEPARTMENTS, REFERRAL_OPTIONS, KTU_COLLEGES
+  └── Used by: components/chat/*, components/sidebar/*,
+  │            app/onboarding/*/page.tsx, app/api/chat/route.ts
+
+lib/rag/search.ts
+  └── Exports: searchSyllabus(), formatContext(), SyllabusMatch
+  └── Used by: lib/rag/generate.ts, app/api/search/route.ts
+
+lib/rag/generate.ts
+  └── Exports: generateAnswer()
+  └── Used by: app/api/chat/route.ts
+```
+
+### Layer 4: Auth & Onboarding Pages
+
+```
+app/(auth)/layout.tsx
+  └── Wraps: login/page.tsx, signup/page.tsx
+  └── Provides: centered card layout
+
+app/(auth)/login/page.tsx → components/auth/LoginForm.tsx
+  └── Calls: supabase.auth.signInWithPassword()
+  └── Redirects to: /chat (on success)
+
+app/(auth)/signup/page.tsx → components/auth/SignupForm.tsx
+  └── Calls: supabase.auth.signUp()
+  └── Creates: user_profiles row
+  └── Redirects to: /auth/callback → /onboarding/step-1
+
+app/auth/callback/route.ts
+  └── Exchanges: PKCE code for session
+  └── Checks: onboarding_completed flag
+  └── Redirects to: /onboarding/step-1 or /chat
+
+app/onboarding/layout.tsx → wraps all 4 steps
+app/onboarding/step-1/page.tsx → components/onboarding/CollegeSelector.tsx
+app/onboarding/step-2/page.tsx → components/onboarding/DepartmentCards.tsx
+app/onboarding/step-3/page.tsx → components/onboarding/SemesterGrid.tsx
+app/onboarding/step-4/page.tsx → components/onboarding/ReferralOptions.tsx
+  └── All store to: localStorage("onboarding_data")
+  └── Step 4 writes to: supabase.user_profiles (upsert)
+```
+
+### Layer 5: Dashboard Layout & Sidebar
+
+```
+app/(dashboard)/layout.tsx
+  ├── components/sidebar/NewChatButton.tsx      → navigates to /chat
+  ├── components/sidebar/NavigationLinks.tsx     → /patterns, /courses
+  ├── components/sidebar/RecentChats.tsx
+  │   └── components/sidebar/ChatItem.tsx
+  │       └── components/sidebar/ChatItemMenu.tsx
+  ├── components/sidebar/UserProfile.tsx         → /profile, signOut
+  └── hooks/useStudyTimer.ts                     → POST /api/study-time
+```
+
+### Layer 6: Chat System
+
+```
+app/(dashboard)/chat/page.tsx
+  └── components/chat/ChatInterface.tsx
+      ├── components/chat/MessageList.tsx
+      │   ├── components/chat/Message.tsx       (react-markdown, remark-gfm)
+      │   └── components/chat/TypingIndicator.tsx
+      ├── components/chat/InputBox.tsx
+      └── POST /api/chat → lib/rag/generate.ts
+                           └── lib/rag/search.ts
+                               └── OpenAI text-embedding-3-small
+                               └── Supabase match_syllabus() RPC
+```
+
+### Layer 7: Other Dashboard Pages
+
+```
+app/(dashboard)/courses/page.tsx  → GET /api/courses → supabase.courses
+app/(dashboard)/patterns/page.tsx → GET /api/patterns → supabase.question_patterns
+app/(dashboard)/profile/page.tsx  → GET /api/profile  → supabase.user_profiles
+                                  → PUT /api/profile  → supabase.user_profiles + auth.users
+                                  → hooks/useStudyTimer.ts (useLiveSessionSeconds)
+```
+
+### Layer 8: Database (Supabase)
+
+```
+supabase/schema.sql
+  └── Tables: user_profiles, courses, modules, syllabus_embeddings,
+  │           conversations, messages, question_patterns, user_progress
+  └── RPC: match_syllabus(), increment_study_time()
+  └── RLS: Policies on all 8 tables
+  └── Extensions: pgvector (vector similarity search)
+
+scripts/seed-syllabus.ts
+  └── Populates: courses, modules, syllabus_embeddings
+  └── Requires: .env.local (OPENAI_API_KEY, SUPABASE_SERVICE_ROLE_KEY)
+```
+
+---
+
+## 6.4 User Perspective Flow — End-to-End Walkthrough
+
+This section traces the complete user journey from first visit to active studying.
+
+### Phase 1: First Visit
+
+```
+User visits ktu-exam-prep.vercel.app
+    │
+    ▼
+middleware.ts intercepts request
+    │ → updateSession() checks cookies
+    │ → No session cookie found
+    │ → Path is "/" (not in public paths list)
+    │
+    ▼
+Redirect → /login
+    │
+    ▼
+app/(auth)/layout.tsx renders centered card
+    │
+    ▼
+app/(auth)/login/page.tsx renders LoginForm
+    │ → User sees: "Welcome back" heading
+    │ → Email input, password input
+    │ → "Sign in" button
+    │ → "Don't have an account? Sign up" link
+    │
+    ▼
+User clicks "Sign up" link
+    │
+    ▼
+app/(auth)/signup/page.tsx renders SignupForm
+    │ → User enters: Full name, Email, Password
+    │ → Real-time password strength meter (0-4 score)
+    │ → Client-side validation (Zod-like manual checks)
+    │
+    ▼
+User clicks "Create account"
+    │
+    ├── 1. supabase.auth.signUp({ email, password, fullName })
+    │      → Row created in auth.users with user_metadata.full_name
+    │
+    ├── 2. supabase.user_profiles.insert({ id, full_name, email })
+    │      → Initial profile row with onboarding_completed = false
+    │
+    └── 3. router.push("/auth/callback?next=/onboarding/step-1")
+```
+
+### Phase 2: Email Verification & Onboarding
+
+```
+User clicks verification link in email
+    │ → URL: /auth/callback?code=XXXX
+    │
+    ▼
+app/auth/callback/route.ts
+    │ → Exchanges PKCE code for session cookies
+    │ → Checks user_profiles.onboarding_completed
+    │ → onboarding_completed = false
+    │
+    ▼
+Redirect → /onboarding/step-1
+    │
+    ▼
+Step 1: College Selection
+    │ → CollegeSelector: searchable dropdown of 130+ KTU colleges
+    │ → GraduationYearPicker: 2025-2030
+    │ → Save to localStorage: { college_name, graduation_year }
+    │ → Click "Next" → router.push("/onboarding/step-2")
+    │
+    ▼
+Step 2: Department Selection
+    │ → DepartmentCards: 5 department cards (CSE, CE, ME, EEE, ECE)
+    │ → Click card → merge into localStorage: { ...prev, branch }
+    │ → Auto-navigate → router.push("/onboarding/step-3")
+    │
+    ▼
+Step 3: Semester Selection
+    │ → SemesterGrid: 8 semester buttons in 2×4 grid
+    │ → Click button → merge into localStorage: { ...prev, semester }
+    │ → Auto-navigate → router.push("/onboarding/step-4")
+    │
+    ▼
+Step 4: Referral + Complete
+    │ → ReferralOptions: 7 options (friend, instagram, whatsapp, etc.)
+    │ → Click "Get Started" button
+    │
+    ├── Read all data from localStorage("onboarding_data")
+    ├── Validate: college_name, branch, semester all present
+    ├── supabase.user_profiles.upsert({
+    │       id, full_name, email, college_name, graduation_year,
+    │       branch, semester, referral_source, onboarding_completed: true
+    │   })
+    ├── Clear localStorage("onboarding_data")
+    │
+    ▼
+Redirect → /chat
+```
+
+### Phase 3: Dashboard & Chat
+
+```
+User arrives at /chat
+    │
+    ▼
+middleware.ts
+    │ → updateSession() refreshes session cookies
+    │ → Session valid, onboarding_completed = true
+    │ → Route is /chat → allowed
+    │
+    ▼
+app/(dashboard)/layout.tsx renders
+    │
+    ├── <StudyTimerTracker /> mounts
+    │   └── useStudyTimer() starts tracking (startSession())
+    │
+    ├── Sidebar loads:
+    │   ├── Logo + "KTU Exam Prep"
+    │   ├── [+ New Chat] button
+    │   ├── Patterns | Courses navigation links
+    │   ├── Recent Chats (fetches from conversations table)
+    │   │   └── Subscribes to Supabase Realtime (postgres_changes)
+    │   └── User Profile (fetches name, email, shows initials avatar)
+    │
+    └── Main content: app/(dashboard)/chat/page.tsx
+        └── <ChatInterface />
+            │
+            ▼
+        Empty state shown:
+            │ → GraduationCap icon
+            │ → "Start a Conversation"
+            │ → 3 suggested prompts:
+            │     📚 "Explain the OSI model layers"
+            │     🧠 "What is Dijkstra's algorithm?"
+            │     🎯 "Important topics in Data Structures"
+            │ → InputBox at bottom: "Ask anything from your syllabus..."
+```
+
+### Phase 4: First Chat Message
+
+```
+User types: "What is polymorphism in Java?"
+    │ → InputBox textarea expands as user types
+    │ → Send button turns indigo (active)
+    │
+    ▼
+User presses Enter (or clicks Send)
+    │
+    ├── 1. Optimistic UI: user message appears instantly in chat
+    ├── 2. isLoading = true → TypingIndicator shows (🤖 ...)
+    ├── 3. InputBox clears, send button goes gray
+    │
+    ▼
+POST /api/chat { message: "What is polymorphism...", conversationId: null }
+    │
+    ├── 4. Server authenticates (session cookies)
+    ├── 5. Rate limit check: chat:user-uuid → 19/20 remaining
+    ├── 6. Validate: message is string, < 5000 chars
+    │
+    ├── 7. conversationId is null → CREATE new conversation
+    │      INSERT INTO conversations (user_id, title: "What is polymorphism in Java?")
+    │      → Returns new conversation UUID
+    │
+    ├── 8. INSERT user message into messages table
+    │
+    ├── 9. Fetch last 10 messages for history (just 1 message now)
+    │
+    ├── 10. RAG PIPELINE:
+    │      a. OpenAI embed "What is polymorphism in Java?" → 1536 floats
+    │      b. match_syllabus() RPC → top 5 matching chunks (similarity > 0.5)
+    │         → Returns: Module 2 Polymorphism (0.89), Module 2 Overriding (0.85), etc.
+    │      c. Format context: "[Reference 1] Course: OOPs | Module 2 | ..."
+    │      d. Build system prompt: KTU assistant rules + syllabus context
+    │      e. GPT-4o-mini generates answer (temperature 0.3, max 1500 tokens)
+    │      f. Format sources: [{ course_code: "PBCST304", module: "Module 2", ... }]
+    │
+    ├── 11. INSERT AI response into messages (with sources JSONB)
+    ├── 12. UPDATE conversations.updated_at
+    │
+    ▼
+JSON Response: { answer: "**Polymorphism** (Module 2)...", sources: [...], conversationId: "uuid" }
+    │
+    ▼
+ChatInterface receives response
+    │
+    ├── 13. AI message appears in chat (with markdown rendering)
+    │       → ReactMarkdown renders headings, code blocks, tables
+    │       → Source pills shown: 📄 PBCST304 Module 2
+    ├── 14. URL updates: /chat → /chat?id=new-uuid (replaceState)
+    ├── 15. Sidebar: "conversation-updated" event → RecentChats refetches
+    │       → New conversation "What is polymorphism in..." appears at top
+    ├── 16. isLoading = false → TypingIndicator hides
+    └── 17. Auto-scroll to bottom (smooth)
+```
+
+### Phase 5: Continued Study
+
+```
+User continues chatting (subsequent messages)
+    │ → conversationId is now set → reuses existing conversation
+    │ → History grows (last 10 messages sent as context)
+    │ → Each response builds on previous conversation
+    │
+    ▼
+User explores sidebar:
+    │
+    ├── Click "Patterns" → /patterns page
+    │   → GET /api/patterns → shows exam question frequency data
+    │
+    ├── Click "Courses" → /courses page
+    │   → GET /api/courses?semester=3 → shows semester 3 courses
+    │
+    ├── Click "Profile Settings" → /profile page
+    │   → GET /api/profile → shows profile + stats
+    │   → Stats: 47 questions asked, 43 min study time, OOPs as fav subject
+    │   → Live session timer ticking: "Session: 12:34"
+    │   → Edit form → PUT /api/profile to update
+    │
+    └── Click [+ New Chat] → /chat (no id)
+        → Empty state returns, ready for new conversation
+
+Meanwhile, in the background:
+    │
+    ├── Study timer tracking:
+    │   ├── Every 60s: flush() → POST /api/study-time { seconds: ~60 }
+    │   │              → increment_study_time RPC: study_time_minutes += 1.0
+    │   ├── Tab hidden/blur: pause + flush
+    │   ├── Tab visible/focus: resume
+    │   └── Tab close: sendBeacon() (fire-and-forget)
+    │
+    └── Sidebar updates:
+        ├── Supabase Realtime: WebSocket subscription on conversations table
+        └── Custom events: "conversation-updated" on new messages
+```
+
+### Phase 6: Sign Out & Return
+
+```
+User clicks their profile avatar → menu opens upward
+    │
+    ├── "Profile Settings" → navigates to /profile
+    │
+    └── "Sign Out" → supabase.auth.signOut()
+        │ → Cookies cleared
+        │ → router.push("/login")
+        │ → router.refresh() → middleware detects no session
+        │
+        ▼
+    Login page shown. All study time has been saved.
+
+User returns later:
+    │ → Visits the site
+    │ → middleware.ts detects valid session cookie
+    │ → Checks onboarding_completed → true
+    │ → Redirects to /chat
+    │ → Previous conversations load in sidebar
+    │ → Click any conversation → messages load from database
+    │ → Study timer starts fresh session
+```
+
+---
+
+## 6.5 Security Summary
+
+| Layer | Protection | Implementation |
+|-------|-----------|----------------|
+| **Transport** | HTTPS | Vercel enforces TLS |
+| **Headers** | CSP, X-Frame-Options, X-Content-Type | `next.config.ts` security headers |
+| **Auth** | Session cookies (httpOnly, SameSite) | `@supabase/ssr` cookie management |
+| **Route protection** | Middleware intercepts all requests | `middleware.ts` → `updateSession()` |
+| **API auth** | `supabase.auth.getUser()` on every request | All API routes verify session |
+| **Rate limiting** | Upstash Redis sliding window | `lib/rate-limit.ts` on every route |
+| **Input validation** | Type checks, length limits, UUID regex | Per-route manual validation |
+| **SQL injection** | Parameterized queries via Supabase SDK | Never concatenates user input into SQL |
+| **Row-level security** | PostgreSQL RLS policies | `supabase/schema.sql` — users see only their own data |
+| **Open redirects** | Whitelist validation on callback `next` param | `app/auth/callback/route.ts` |
+| **Error leakage** | Generic error messages to client | Real errors only logged server-side |
+
+---
+
+## 6.6 Environment Variables Reference
+
+| Variable | Where Used | Purpose |
+|----------|-----------|---------|
+| `NEXT_PUBLIC_SUPABASE_URL` | Client + Server | Supabase project URL |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Client + Server | Public anonymous key (RLS-protected) |
+| `SUPABASE_SERVICE_ROLE_KEY` | Server only | Admin key (bypasses RLS) |
+| `OPENAI_API_KEY` | Server only | OpenAI API for embeddings + chat completions |
+| `UPSTASH_REDIS_REST_URL` | Server only | Upstash Redis URL for rate limiting |
+| `UPSTASH_REDIS_REST_TOKEN` | Server only | Upstash Redis auth token |
+
+---
+
+*End of Part 6. This concludes the complete project flow documentation.*
+
+---
+
+# Document Summary
+
+This document covered the **entire KTU Exam Prep AI platform** in 6 parts:
+
+| Part | Content | Key Files |
+|------|---------|-----------|
+| **1** | Architecture, Config, Supabase Layer | `schema.sql`, `middleware.ts`, `server.ts`, `client.ts` |
+| **2** | Auth System + Onboarding | `LoginForm`, `SignupForm`, `callback/route.ts`, Steps 1-4 |
+| **3** | Dashboard Layout + Sidebar + Study Timer | `layout.tsx`, 6 sidebar components, `useStudyTimer.ts` |
+| **4** | AI Chat System + RAG Pipeline | `ChatInterface`, `Message`, `search.ts`, `generate.ts`, `/api/chat` |
+| **5** | API Routes + Types + Utilities | 6 API routes, `types/index.ts`, `lib/utils.ts` |
+| **6** | Seeding + File Map + User Flow | `seed-syllabus.ts`, connection map, end-to-end walkthrough |
+
+**Total files documented**: 60+  
+**Total database tables**: 8  
+**Total API routes**: 7  
+**Total React components**: 20+  
+
+---
+
+*Generated on April 6, 2026 — KTU Exam Prep AI v1.0*
