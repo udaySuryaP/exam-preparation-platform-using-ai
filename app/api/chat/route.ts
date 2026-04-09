@@ -39,7 +39,15 @@ export async function POST(req: NextRequest) {
             );
         }
 
-        const body = await req.json();
+        let body;
+        try {
+            body = await req.json();
+        } catch {
+            return NextResponse.json(
+                { error: "Invalid JSON body" },
+                { status: 400 }
+            );
+        }
         const message: string = body.message;
         const conversationId: string | undefined = body.conversationId;
         const courseId: string | undefined = body.courseId;
@@ -93,11 +101,27 @@ export async function POST(req: NextRequest) {
                 );
             }
         } else {
+            // Limit max conversations per user
+            const { count: convCount } = await supabase
+                .from("conversations")
+                .select("id", { count: "exact", head: true })
+                .eq("user_id", user.id);
+
+            if ((convCount ?? 0) >= 500) {
+                return NextResponse.json(
+                    { error: "Maximum conversations reached. Please delete old ones." },
+                    { status: 429 }
+                );
+            }
+
+            // Sanitize title — strip potential HTML/script tags
+            const safeTitle = message.slice(0, 50).replace(/<[^>]*>/g, "");
+
             const { data: newConv, error: convError } = await supabase
                 .from("conversations")
                 .insert({
                     user_id: user.id,
-                    title: message.slice(0, 50),
+                    title: safeTitle || "New Chat",
                     course_id: courseId ?? null,
                 })
                 .select("id")

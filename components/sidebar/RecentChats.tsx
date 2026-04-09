@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { useSearchParams } from "next/navigation";
 import { MessageSquare } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
@@ -22,8 +22,10 @@ export function RecentChats({ onNavigate }: RecentChatsProps) {
     const activeId = searchParams.get("id");
     const [conversations, setConversations] = useState<Conversation[]>([]);
     const [isLoading, setIsLoading] = useState(true);
+    const [userId, setUserId] = useState<string | null>(null);
 
-    const supabase = createClient();
+    // Memoize the Supabase client to prevent re-creation on every render
+    const supabase = useMemo(() => createClient(), []);
 
     const fetchConversations = useCallback(async () => {
         const {
@@ -31,6 +33,7 @@ export function RecentChats({ onNavigate }: RecentChatsProps) {
         } = await supabase.auth.getUser();
 
         if (!user) return;
+        setUserId(user.id);
 
         const { data } = await supabase
             .from("conversations")
@@ -46,7 +49,10 @@ export function RecentChats({ onNavigate }: RecentChatsProps) {
     useEffect(() => {
         fetchConversations();
 
-        // Real-time subscription via Supabase
+        // Only subscribe when we have a userId for filtering
+        if (!userId) return;
+
+        // Real-time subscription filtered to this user's conversations only
         const channel = supabase
             .channel("conversations-changes")
             .on(
@@ -55,6 +61,7 @@ export function RecentChats({ onNavigate }: RecentChatsProps) {
                     event: "*",
                     schema: "public",
                     table: "conversations",
+                    filter: `user_id=eq.${userId}`,
                 },
                 () => {
                     fetchConversations();
@@ -72,7 +79,7 @@ export function RecentChats({ onNavigate }: RecentChatsProps) {
             supabase.removeChannel(channel);
             window.removeEventListener("conversation-updated", handleConversationUpdated);
         };
-    }, [fetchConversations, supabase]);
+    }, [fetchConversations, supabase, userId]);
 
     const handleRename = async (id: string, newTitle: string) => {
         // Optimistic update
@@ -95,8 +102,7 @@ export function RecentChats({ onNavigate }: RecentChatsProps) {
         // Optimistic update
         setConversations((prev) => prev.filter((c) => c.id !== id));
 
-        // Delete messages first, then conversation
-        await supabase.from("messages").delete().eq("conversation_id", id);
+        // CASCADE on the FK handles message deletion automatically — no need to delete messages first
         const { error } = await supabase.from("conversations").delete().eq("id", id);
 
         if (error) {

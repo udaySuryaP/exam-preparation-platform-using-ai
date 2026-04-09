@@ -12,8 +12,11 @@ export async function GET(request: NextRequest) {
         const supabase = await createClient();
 
         // IP-based rate limiting for public route
-        const forwarded = request.headers.get("x-forwarded-for");
-        const ip = forwarded?.split(",")[0]?.trim() ?? "unknown";
+        // Use x-real-ip (set by most proxies) or last entry in x-forwarded-for
+        const ip =
+            request.headers.get("x-real-ip") ??
+            request.headers.get("x-forwarded-for")?.split(",").pop()?.trim() ??
+            "unknown";
         const rateResult = await checkRateLimit(`courses:${ip}`, COURSES_RATE_LIMIT);
         if (!rateResult.allowed) {
             return NextResponse.json(

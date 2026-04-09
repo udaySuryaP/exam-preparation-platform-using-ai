@@ -17,7 +17,11 @@ CREATE TABLE IF NOT EXISTS user_profiles (
   onboarding_completed BOOLEAN DEFAULT FALSE,
   study_time_minutes FLOAT DEFAULT 0,
   created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  CONSTRAINT study_time_non_negative CHECK (study_time_minutes >= 0),
+  CONSTRAINT semester_range CHECK (semester >= 1 AND semester <= 8),
+  CONSTRAINT full_name_length CHECK (char_length(full_name) <= 200),
+  CONSTRAINT college_name_length CHECK (char_length(college_name) <= 300)
 );
 
 -- ============================================
@@ -91,7 +95,8 @@ CREATE TABLE IF NOT EXISTS conversations (
   title TEXT NOT NULL DEFAULT 'New Chat',
   course_id UUID REFERENCES courses(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  CONSTRAINT conversations_title_length CHECK (char_length(title) <= 200)
 );
 
 -- ============================================

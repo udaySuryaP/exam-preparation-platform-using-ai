@@ -85,10 +85,15 @@ export function useStudyTimer() {
         const handleBeforeUnload = () => {
             const seconds = getSessionSeconds();
             if (seconds >= 5) {
-                navigator.sendBeacon(
-                    "/api/study-time",
-                    new Blob([JSON.stringify({ seconds })], { type: "application/json" })
-                );
+                // Use fetch with keepalive instead of sendBeacon to preserve auth cookies
+                fetch("/api/study-time", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ seconds }),
+                    keepalive: true,
+                }).catch(() => {
+                    // If save fails on unload, time is lost — acceptable tradeoff
+                });
                 resetSession();
             }
         };

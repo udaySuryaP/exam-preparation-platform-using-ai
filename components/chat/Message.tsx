@@ -3,6 +3,7 @@
 import { useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import rehypeSanitize from "rehype-sanitize";
 import { Copy, Check, RefreshCw } from "lucide-react";
 import type { Message as MessageType } from "@/types";
 import { cn } from "@/lib/utils";
@@ -51,7 +52,18 @@ export function Message({ message, onRegenerate }: MessageProps) {
                         <div className="prose prose-sm max-w-none prose-headings:text-gray-900 prose-p:text-gray-700 prose-strong:text-gray-900 prose-code:text-indigo-700 prose-code:bg-indigo-50 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:text-xs prose-pre:bg-gray-900 prose-pre:text-gray-100 prose-a:text-indigo-600">
                             <ReactMarkdown
                                 remarkPlugins={[remarkGfm]}
+                                rehypePlugins={[rehypeSanitize]}
                                 components={{
+                                    a: ({ href, children }) => (
+                                        <a
+                                            href={href}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="text-indigo-600 underline hover:text-indigo-800"
+                                        >
+                                            {children}
+                                        </a>
+                                    ),
                                     pre: ({ children }) => (
                                         <pre className="relative group/code overflow-x-auto rounded-lg p-4 my-2 bg-gray-900 text-gray-100 text-xs">
                                             {children}

@@ -6,6 +6,12 @@ import { ArrowLeft, Loader2, Sparkles } from "lucide-react";
 import { ProgressIndicator } from "@/components/onboarding/ProgressIndicator";
 import { ReferralOptions } from "@/components/onboarding/ReferralOptions";
 import { createClient } from "@/lib/supabase/client";
+import { KTU_COLLEGES, DEPARTMENTS } from "@/types";
+
+/** Strip HTML tags to prevent stored XSS */
+function stripHtml(str: string): string {
+    return str.replace(/<[^>]*>/g, "");
+}
 
 export default function Step4Page() {
     const router = useRouter();
@@ -23,17 +29,26 @@ export default function Step4Page() {
         }
         const onboardingData: Record<string, unknown> = { ...existing, referral };
 
-        // Validate critical fields
-        const collegeName = typeof onboardingData.college === "string"
-            ? onboardingData.college.slice(0, 200)
+        // Validate and sanitize critical fields
+        const rawCollege = typeof onboardingData.college === "string"
+            ? stripHtml(onboardingData.college.slice(0, 200))
             : "";
+        // Validate against the KTU colleges whitelist
+        const collegeName = KTU_COLLEGES.includes(rawCollege) ? rawCollege : "";
+
         const gradYear = Number(onboardingData.graduationYear);
         const validGradYear = Number.isInteger(gradYear) && gradYear >= 2020 && gradYear <= 2035
             ? gradYear
             : 2025;
-        const branch = typeof onboardingData.department === "string"
-            ? onboardingData.department.slice(0, 50)
+
+        const rawBranch = typeof onboardingData.department === "string"
+            ? stripHtml(onboardingData.department.slice(0, 50))
             : "";
+        // Validate against the departments whitelist
+        const branch = DEPARTMENTS.some(d => d.name === rawBranch || d.shortName === rawBranch)
+            ? rawBranch
+            : "";
+
         const semester = Number(onboardingData.semester);
         const validSemester = Number.isInteger(semester) && semester >= 1 && semester <= 8
             ? semester

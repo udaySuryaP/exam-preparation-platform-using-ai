@@ -23,7 +23,13 @@ export async function POST(request: Request) {
             );
         }
 
-        const body = await request.json();
+        let body;
+        try {
+            body = await request.json();
+        } catch {
+            return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+        }
+
         const seconds = Number(body.seconds);
 
         // Validate: must be a positive number, max 5 minutes per save (to prevent abuse)
@@ -40,27 +46,8 @@ export async function POST(request: Request) {
         });
 
         if (error) {
-            // Fallback: retry via direct PostgREST fetch to the same atomic RPC
-            const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-            const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-            const fallbackRes = await fetch(
-                `${supabaseUrl}/rest/v1/rpc/increment_study_time`,
-                {
-                    method: "POST",
-                    headers: {
-                        "Content-Type": "application/json",
-                        "apikey": supabaseKey,
-                        "Authorization": `Bearer ${supabaseKey}`,
-                    },
-                    body: JSON.stringify({
-                        user_uuid: user.id,
-                        minutes_to_add: minutesToAdd,
-                    }),
-                }
-            );
-            if (!fallbackRes.ok) {
-                console.error("[study-time] Fallback RPC failed:", await fallbackRes.text());
-            }
+            console.error("[study-time] RPC failed:", error.message);
+            return NextResponse.json({ error: "Failed to save study time" }, { status: 500 });
         }
 
         return NextResponse.json({ success: true });

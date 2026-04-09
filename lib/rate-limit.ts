@@ -62,9 +62,17 @@ export async function checkRateLimit(
 ): Promise<RateLimitResult> {
     const limiter = getLimiter(config);
 
-    // Graceful degradation: if Redis is not configured, allow all requests
+    // Graceful degradation depends on environment
     if (!limiter) {
-        console.warn("[RateLimit] Upstash Redis not configured — rate limiting is disabled.");
+        if (process.env.NODE_ENV === "production") {
+            console.error("[RateLimit] Upstash Redis not configured in production — blocking request.");
+            return {
+                allowed: false,
+                remaining: 0,
+                resetAt: Date.now() + config.windowSeconds * 1000,
+            };
+        }
+        console.warn("[RateLimit] Upstash Redis not configured — rate limiting disabled (dev mode).");
         return {
             allowed: true,
             remaining: config.maxRequests,
@@ -80,8 +88,16 @@ export async function checkRateLimit(
             resetAt: result.reset,
         };
     } catch (err) {
-        // If Upstash is unreachable, degrade gracefully and allow the request
-        console.warn("[RateLimit] Upstash error, allowing request:", err instanceof Error ? err.message : err);
+        console.error("[RateLimit] Upstash error:", err instanceof Error ? err.message : err);
+        if (process.env.NODE_ENV === "production") {
+            // Fail closed in production — block when uncertain
+            return {
+                allowed: false,
+                remaining: 0,
+                resetAt: Date.now() + config.windowSeconds * 1000,
+            };
+        }
+        // Fail open in development
         return {
             allowed: true,
             remaining: config.maxRequests,

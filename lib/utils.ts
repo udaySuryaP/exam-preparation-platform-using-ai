@@ -20,9 +20,11 @@ export function truncate(str: string, length: number): string {
 }
 
 export function formatDate(date: string | Date): string {
+  const parsed = new Date(date);
+  if (isNaN(parsed.getTime())) return "Invalid date";
   return new Intl.DateTimeFormat("en-IN", {
     day: "numeric",
     month: "short",
     year: "numeric",
-  }).format(new Date(date));
+  }).format(parsed);
 }

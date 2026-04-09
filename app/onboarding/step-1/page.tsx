@@ -45,7 +45,7 @@ export default function Step1Page() {
                         className="w-full px-4 py-3 rounded-lg border border-gray-200 bg-gray-50 text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all duration-200 text-sm appearance-none"
                     >
                         <option value="">Select year</option>
-                        {[2024, 2025, 2026, 2027, 2028, 2029, 2030].map((year) => (
+                        {Array.from({ length: 7 }, (_, i) => new Date().getFullYear() + i - 2).map((year) => (
                             <option key={year} value={year}>
                                 {year}
                             </option>
