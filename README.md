@@ -94,8 +94,8 @@ Before you begin, make sure you have:
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/udaySuryaP/exam-preparation-platform-using-ai.git
-cd exam-preparation-platform-using-ai
+git clone https://github.com/udaySuryaP/exam-preparation-platform-using-ai-mini-project.git
+cd exam-preparation-platform-using-ai-mini-project
 ```
 
 ### 2. Install Dependencies
@@ -138,7 +138,7 @@ Run the schema in the Supabase SQL Editor:
 In your Supabase dashboard:
 
 1. Go to **Authentication → Providers → Email**
-2. Disable "Confirm email" (for development)
+2. For local development only, you may disable "Confirm email"; keep email confirmation enabled in production
 3. Set redirect URL to your app URL
 
 ### 6. Start Development Server
